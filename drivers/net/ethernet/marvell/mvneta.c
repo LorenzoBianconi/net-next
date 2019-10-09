@@ -2160,11 +2160,9 @@ mvneta_swbm_rx_frame(struct mvneta_port *pp,
 		u32 ret;
 
 		ret = mvneta_run_xdp(pp, xdp_prog, &xdp);
-		if (ret == MVNETA_XDP_REDIR ||
-		    ret == MVNETA_XDP_TX)
+		if (ret != MVNETA_XDP_PASS) {
 			mvneta_update_stats(pp, 1, xdp.data_end - xdp.data,
 					    false);
-		if (ret != MVNETA_XDP_PASS) {
 			rx_desc->buf_phys_addr = 0;
 			*xdp_ret |= ret;
 			return ret;
