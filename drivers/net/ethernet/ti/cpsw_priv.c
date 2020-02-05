@@ -1317,7 +1317,7 @@ int cpsw_xdp_tx_frame(struct cpsw_priv *priv, struct xdp_frame *xdpf,
 }
 
 int cpsw_run_xdp(struct cpsw_priv *priv, int ch, struct xdp_buff *xdp,
-		 struct page *page, int port)
+		 struct page *page, int port, int *len)
 {
 	struct cpsw_common *cpsw = priv->cpsw;
 	struct net_device *ndev = priv->ndev;
@@ -1335,10 +1335,13 @@ int cpsw_run_xdp(struct cpsw_priv *priv, int ch, struct xdp_buff *xdp,
 	}
 
 	act = bpf_prog_run_xdp(prog, xdp);
+	/* XDP prog might have changed packet data and boundaries */
+	*len = xdp.data_end - xdp.data;
+
 	switch (act) {
 	case XDP_PASS:
 		ret = CPSW_XDP_PASS;
-		break;
+		goto out;
 	case XDP_TX:
 		xdpf = convert_to_xdp_frame(xdp);
 		if (unlikely(!xdpf))
@@ -1364,8 +1367,14 @@ int cpsw_run_xdp(struct cpsw_priv *priv, int ch, struct xdp_buff *xdp,
 		trace_xdp_exception(ndev, prog, act);
 		/* fall through -- handle aborts by dropping packet */
 	case XDP_DROP:
+		ndev->stats.rx_bytes += *len;
+		ndev->stats.rx_packets++;
 		goto drop;
 	}
+
+	ndev->stats.rx_bytes += *len;
+	ndev->stats.rx_packets++;
+
 out:
 	rcu_read_unlock();
 	return ret;
