@@ -655,6 +655,8 @@ struct mvneta_tx_queue {
 
 	/* Affinity mask for CPUs*/
 	cpumask_t affinity_mask;
+
+	struct ptr_ring ring;
 };
 
 struct mvneta_rx_queue {
@@ -2719,14 +2721,30 @@ static netdev_tx_t mvneta_tx(struct sk_buff *skb, struct net_device *dev)
 	struct mvneta_port *pp = netdev_priv(dev);
 	u16 txq_id = skb_get_queue_mapping(skb);
 	struct mvneta_tx_queue *txq = &pp->txqs[txq_id];
-	struct mvneta_tx_buf *buf = &txq->buf[txq->txq_put_index];
-	struct mvneta_tx_desc *tx_desc;
-	int len = skb->len;
-	int frags = 0;
-	u32 tx_cmd;
 
-	if (!netif_running(dev))
-		goto out;
+	if (!netif_running(dev) || __ptr_ring_produce(&txq->ring, skb)) {
+		dev->stats.tx_dropped++;
+		dev_kfree_skb_any(skb);
+	} else if (!pp->neta_armada3700) {
+		struct mvneta_pcpu_port *port = this_cpu_ptr(pp->ports);
+
+		napi_schedule(&port->napi);
+	} else {
+		napi_schedule(&pp->napi);
+	}
+
+	return NETDEV_TX_OK;
+}
+
+static int mvneta_poll_tx_skb(struct mvneta_port *pp,
+			      struct mvneta_tx_queue *txq,
+			      struct sk_buff *skb)
+{
+	struct mvneta_tx_buf *buf = &txq->buf[txq->txq_put_index];
+	struct net_device *dev = pp->dev;
+	struct mvneta_tx_desc *tx_desc;
+	int frags, len = skb->len;
+	u32 tx_cmd;
 
 	if (skb_is_gso(skb)) {
 		frags = mvneta_tx_tso(skb, dev, txq);
@@ -2773,13 +2791,12 @@ static netdev_tx_t mvneta_tx(struct sk_buff *skb, struct net_device *dev)
 					 DMA_TO_DEVICE);
 			mvneta_txq_desc_put(txq);
 			frags = 0;
-			goto out;
 		}
 	}
 
 out:
 	if (frags > 0) {
-		struct netdev_queue *nq = netdev_get_tx_queue(dev, txq_id);
+		struct netdev_queue *nq = netdev_get_tx_queue(dev, txq->id);
 		struct mvneta_pcpu_stats *stats = this_cpu_ptr(pp->stats);
 
 		netdev_tx_sent_queue(nq, len);
@@ -2803,9 +2820,25 @@ out:
 		dev_kfree_skb_any(skb);
 	}
 
-	return NETDEV_TX_OK;
+	return 0;
 }
 
+static void mvneta_poll_tx(struct mvneta_port *pp)
+{
+	int i;
+
+	for (i = 0; i < txq_number; i++) {
+		struct mvneta_tx_queue *txq = &pp->txqs[i];
+
+		while (!__ptr_ring_empty(&txq->ring)) {
+			struct sk_buff *skb;
+
+			skb = __ptr_ring_consume(&txq->ring);
+			if (skb)
+				mvneta_poll_tx_skb(pp, txq, skb);
+		}
+	}
+}
 
 /* Free tx resources, when resetting a port */
 static void mvneta_txq_done_force(struct mvneta_port *pp,
@@ -3106,6 +3139,8 @@ static int mvneta_poll(struct napi_struct *napi, int budget)
 		cause_rx_tx &= ~MVNETA_TX_INTR_MASK_ALL;
 	}
 
+	mvneta_poll_tx(pp);
+
 	/* For the case where the last mvneta_poll did not process all
 	 * RX packets
 	 */
@@ -3382,7 +3417,7 @@ static int mvneta_txq_sw_init(struct mvneta_port *pp,
 	cpumask_set_cpu(cpu, &txq->affinity_mask);
 	netif_set_xps_queue(pp->dev, &txq->affinity_mask, txq->id);
 
-	return 0;
+	return ptr_ring_init(&txq->ring, txq->size, GFP_KERNEL);
 }
 
 static void mvneta_txq_hw_init(struct mvneta_port *pp,
@@ -3414,6 +3449,11 @@ static int mvneta_txq_init(struct mvneta_port *pp,
 	return 0;
 }
 
+static void mvneta_ptr_ring_free(void *ptr)
+{
+	kfree_skb(ptr);
+}
+
 /* Free allocated resources when mvneta_txq_init() fails to allocate memory*/
 static void mvneta_txq_sw_deinit(struct mvneta_port *pp,
 				 struct mvneta_tx_queue *txq)
@@ -3430,6 +3470,8 @@ static void mvneta_txq_sw_deinit(struct mvneta_port *pp,
 		dma_free_coherent(pp->dev->dev.parent,
 				  txq->size * MVNETA_DESC_ALIGNED_SIZE,
 				  txq->descs, txq->descs_phys);
+
+	ptr_ring_cleanup(&txq->ring, mvneta_ptr_ring_free);
 
 	netdev_tx_reset_queue(nq);
 
