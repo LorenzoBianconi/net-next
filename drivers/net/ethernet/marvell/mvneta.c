@@ -2086,7 +2086,6 @@ mvneta_xdp_xmit_back(struct mvneta_port *pp, struct xdp_buff *xdp)
 {
 	struct mvneta_pcpu_stats *stats = this_cpu_ptr(pp->stats);
 	struct mvneta_tx_queue *txq;
-	struct netdev_queue *nq;
 	struct xdp_frame *xdpf;
 	int cpu;
 	u32 ret;
@@ -2097,9 +2096,7 @@ mvneta_xdp_xmit_back(struct mvneta_port *pp, struct xdp_buff *xdp)
 
 	cpu = smp_processor_id();
 	txq = &pp->txqs[cpu % txq_number];
-	nq = netdev_get_tx_queue(pp->dev, txq->id);
 
-	__netif_tx_lock(nq, cpu);
 	ret = mvneta_xdp_submit_frame(pp, txq, xdpf, false);
 	if (ret == MVNETA_XDP_TX) {
 		u64_stats_update_begin(&stats->syncp);
@@ -2114,7 +2111,6 @@ mvneta_xdp_xmit_back(struct mvneta_port *pp, struct xdp_buff *xdp)
 		stats->es.ps.xdp_tx_err++;
 		u64_stats_update_end(&stats->syncp);
 	}
-	__netif_tx_unlock(nq);
 
 	return ret;
 }
@@ -2915,20 +2911,12 @@ static void mvneta_txq_done_force(struct mvneta_port *pp,
  */
 static void mvneta_tx_done_gbe(struct mvneta_port *pp, u32 cause_tx_done)
 {
-	struct mvneta_tx_queue *txq;
-	struct netdev_queue *nq;
-	int cpu = smp_processor_id();
-
 	while (cause_tx_done) {
+		struct mvneta_tx_queue *txq;
+
 		txq = mvneta_tx_done_policy(pp, cause_tx_done);
-
-		nq = netdev_get_tx_queue(pp->dev, txq->id);
-		__netif_tx_lock(nq, cpu);
-
 		if (txq->count)
 			mvneta_txq_done(pp, txq);
-
-		__netif_tx_unlock(nq);
 		cause_tx_done &= ~((1 << txq->id));
 	}
 }
