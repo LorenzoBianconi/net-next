@@ -366,6 +366,8 @@ struct mvneta_statistic {
 #define MVNETA_XDP_TX		BIT(1)
 #define MVNETA_XDP_REDIR	BIT(2)
 
+#define MVNETA_XDP_FLAG		BIT(0)
+
 static const struct mvneta_statistic mvneta_statistics[] = {
 	{ 0x3000, T_REG_64, "good_octets_received", },
 	{ 0x3010, T_REG_32, "good_frames_received", },
@@ -715,6 +717,21 @@ static int global_port_id;
 #define MVNETA_DRIVER_VERSION "1.0"
 
 /* Utility/helper methods */
+
+static bool mvneta_is_xdp_frame(void *ptr)
+{
+	return (unsigned long)ptr & MVNETA_XDP_FLAG;
+}
+
+static void *mvneta_ptr_to_xdp(void *ptr)
+{
+	return (void *)((unsigned long)ptr & ~MVNETA_XDP_FLAG);
+}
+
+static void *mvneta_xdp_to_ptr(void *ptr)
+{
+	return (void *)((unsigned long)ptr | MVNETA_XDP_FLAG);
+}
 
 /* Write helper method */
 static void mvreg_write(struct mvneta_port *pp, u32 offset, u32 data)
@@ -2107,42 +2124,41 @@ mvneta_xdp_xmit(struct net_device *dev, int num_frame,
 		struct xdp_frame **frames, u32 flags)
 {
 	struct mvneta_port *pp = netdev_priv(dev);
-	struct mvneta_pcpu_stats *stats = this_cpu_ptr(pp->stats);
-	int i, nxmit_byte = 0, nxmit = num_frame;
-	int cpu = smp_processor_id();
+	struct mvneta_pcpu_stats *stats;
 	struct mvneta_tx_queue *txq;
-	struct netdev_queue *nq;
-	u32 ret;
+	int i, drops = 0;
 
 	if (unlikely(flags & ~XDP_XMIT_FLAGS_MASK))
 		return -EINVAL;
 
-	txq = &pp->txqs[cpu % txq_number];
-	nq = netdev_get_tx_queue(pp->dev, txq->id);
+	txq = &pp->txqs[smp_processor_id() % txq_number];
 
-	__netif_tx_lock(nq, cpu);
 	for (i = 0; i < num_frame; i++) {
-		ret = mvneta_xdp_submit_frame(pp, txq, frames[i], true);
-		if (ret == MVNETA_XDP_TX) {
-			nxmit_byte += frames[i]->len;
-		} else {
+		void *ptr = mvneta_xdp_to_ptr(frames[i]);
+
+		if (ptr_ring_produce(&txq->ring, ptr)) {
 			xdp_return_frame_rx_napi(frames[i]);
-			nxmit--;
+			drops++;
 		}
 	}
 
-	if (unlikely(flags & XDP_XMIT_FLUSH))
-		mvneta_txq_pend_desc_add(pp, txq, 0);
-	__netif_tx_unlock(nq);
+	if (unlikely(flags & XDP_XMIT_FLUSH)) {
+		if (!pp->neta_armada3700) {
+			struct mvneta_pcpu_port *port;
 
+			port = this_cpu_ptr(pp->ports);
+			napi_schedule(&port->napi);
+		} else {
+			napi_schedule(&pp->napi);
+		}
+	}
+
+	stats = this_cpu_ptr(pp->stats);
 	u64_stats_update_begin(&stats->syncp);
-	stats->es.ps.tx_bytes += nxmit_byte;
-	stats->es.ps.tx_packets += nxmit;
-	stats->es.ps.xdp_xmit += nxmit;
-	stats->es.ps.xdp_xmit_err += num_frame - nxmit;
+	stats->es.ps.xdp_xmit_err += drops;
 	u64_stats_update_end(&stats->syncp);
 
-	return nxmit;
+	return num_frame - drops;
 }
 
 static int
@@ -2720,10 +2736,11 @@ error:
 static netdev_tx_t mvneta_tx(struct sk_buff *skb, struct net_device *dev)
 {
 	struct mvneta_port *pp = netdev_priv(dev);
-	u16 txq_id = skb_get_queue_mapping(skb);
-	struct mvneta_tx_queue *txq = &pp->txqs[txq_id];
+	struct mvneta_tx_queue *txq;
 
-	if (!netif_running(dev) || __ptr_ring_produce(&txq->ring, skb)) {
+	txq = &pp->txqs[skb_get_queue_mapping(skb)];
+
+	if (!netif_running(dev) || ptr_ring_produce_bh(&txq->ring, skb)) {
 		dev->stats.tx_dropped++;
 		dev_kfree_skb_any(skb);
 	} else if (!pp->neta_armada3700) {
@@ -2831,6 +2848,33 @@ out:
 	return 0;
 }
 
+static int mvneta_poll_xdp(struct mvneta_port *pp,
+			   struct mvneta_tx_queue *txq,
+			   struct xdp_frame *frame)
+{
+	struct mvneta_pcpu_stats *stats = this_cpu_ptr(pp->stats);
+	int ret, nxmit_byte = 0, nxmit = 0, nxmit_err = 0;
+
+	ret = mvneta_xdp_submit_frame(pp, txq, frame, true);
+	if (ret == MVNETA_XDP_TX) {
+		mvneta_txq_pend_desc_add(pp, txq, 0);
+		nxmit_byte += frame->len;
+		nxmit++;
+	} else {
+		xdp_return_frame_rx_napi(frame);
+		nxmit_err++;
+	}
+
+	u64_stats_update_begin(&stats->syncp);
+	stats->es.ps.tx_bytes += nxmit_byte;
+	stats->es.ps.tx_packets += nxmit;
+	stats->es.ps.xdp_xmit += nxmit;
+	stats->es.ps.xdp_xmit_err += nxmit_err;
+	u64_stats_update_end(&stats->syncp);
+
+	return nxmit;
+}
+
 static void mvneta_poll_tx(struct mvneta_port *pp)
 {
 	int i;
@@ -2839,11 +2883,13 @@ static void mvneta_poll_tx(struct mvneta_port *pp)
 		struct mvneta_tx_queue *txq = &pp->txqs[i];
 
 		while (!__ptr_ring_empty(&txq->ring)) {
-			struct sk_buff *skb;
+			void *ptr = __ptr_ring_consume(&txq->ring);
 
-			skb = __ptr_ring_consume(&txq->ring);
-			if (skb)
-				mvneta_poll_tx_skb(pp, txq, skb);
+			if (mvneta_is_xdp_frame(ptr))
+				mvneta_poll_xdp(pp, txq,
+						mvneta_ptr_to_xdp(ptr));
+			else
+				mvneta_poll_tx_skb(pp, txq, ptr);
 		}
 	}
 }
@@ -3459,7 +3505,10 @@ static int mvneta_txq_init(struct mvneta_port *pp,
 
 static void mvneta_ptr_ring_free(void *ptr)
 {
-	kfree_skb(ptr);
+	if (mvneta_is_xdp_frame(ptr))
+		xdp_return_frame(mvneta_ptr_to_xdp(ptr));
+	else
+		kfree_skb(ptr);
 }
 
 /* Free allocated resources when mvneta_txq_init() fails to allocate memory*/
