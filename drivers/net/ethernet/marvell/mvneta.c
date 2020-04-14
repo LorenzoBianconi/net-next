@@ -2600,11 +2600,11 @@ static int mvneta_tx_tso(struct sk_buff *skb, struct net_device *dev,
 
 	/* Count needed descriptors */
 	if ((txq->count + tso_count_descs(skb)) >= txq->size)
-		return 0;
+		return -ENOMEM;
 
 	if (skb_headlen(skb) < (skb_transport_offset(skb) + tcp_hdrlen(skb))) {
 		pr_info("*** Is this even  possible???!?!?\n");
-		return 0;
+		return -ENOMEM;
 	}
 
 	/* Initialize the TSO handler, and prepare the first payload */
@@ -2656,7 +2656,8 @@ err_release:
 					 DMA_TO_DEVICE);
 		mvneta_txq_desc_put(txq);
 	}
-	return 0;
+
+	return -ENOMEM;
 }
 
 /* Handle tx fragmentation processing */
@@ -2742,12 +2743,19 @@ static int mvneta_poll_tx_skb(struct mvneta_port *pp,
 {
 	struct mvneta_tx_buf *buf = &txq->buf[txq->txq_put_index];
 	struct net_device *dev = pp->dev;
+	struct mvneta_pcpu_stats *stats;
 	struct mvneta_tx_desc *tx_desc;
 	int frags, len = skb->len;
+	struct netdev_queue *nq;
 	u32 tx_cmd;
 
 	if (skb_is_gso(skb)) {
 		frags = mvneta_tx_tso(skb, dev, txq);
+		if (frags <= 0) {
+			dev->stats.tx_dropped++;
+			dev_kfree_skb_any(skb);
+			return -ENOMEM;
+		}
 		goto out;
 	}
 
@@ -2766,8 +2774,9 @@ static int mvneta_poll_tx_skb(struct mvneta_port *pp,
 	if (unlikely(dma_mapping_error(dev->dev.parent,
 				       tx_desc->buf_phys_addr))) {
 		mvneta_txq_desc_put(txq);
-		frags = 0;
-		goto out;
+		dev->stats.tx_dropped++;
+		dev_kfree_skb_any(skb);
+		return -ENOMEM;
 	}
 
 	buf->type = MVNETA_TYPE_SKB;
@@ -2778,47 +2787,46 @@ static int mvneta_poll_tx_skb(struct mvneta_port *pp,
 		buf->skb = skb;
 		mvneta_txq_inc_put(txq);
 	} else {
+		int err;
+
 		/* First but not Last */
 		tx_cmd |= MVNETA_TXD_F_DESC;
 		buf->skb = NULL;
 		mvneta_txq_inc_put(txq);
 		tx_desc->command = tx_cmd;
 		/* Continue with other skb fragments */
-		if (mvneta_tx_frag_process(pp, skb, txq)) {
+		err = mvneta_tx_frag_process(pp, skb, txq);
+		if (err < 0) {
 			dma_unmap_single(dev->dev.parent,
 					 tx_desc->buf_phys_addr,
 					 tx_desc->data_size,
 					 DMA_TO_DEVICE);
 			mvneta_txq_desc_put(txq);
-			frags = 0;
+			dev->stats.tx_dropped++;
+			dev_kfree_skb_any(skb);
+			return err;
 		}
 	}
 
 out:
-	if (frags > 0) {
-		struct netdev_queue *nq = netdev_get_tx_queue(dev, txq->id);
-		struct mvneta_pcpu_stats *stats = this_cpu_ptr(pp->stats);
+	nq = netdev_get_tx_queue(dev, txq->id);
+	stats = this_cpu_ptr(pp->stats);
+	netdev_tx_sent_queue(nq, len);
 
-		netdev_tx_sent_queue(nq, len);
+	txq->count += frags;
+	if (txq->count >= txq->tx_stop_threshold)
+		netif_tx_stop_queue(nq);
 
-		txq->count += frags;
-		if (txq->count >= txq->tx_stop_threshold)
-			netif_tx_stop_queue(nq);
+	if (!netdev_xmit_more() || netif_xmit_stopped(nq) ||
+	    txq->pending + frags > MVNETA_TXQ_DEC_SENT_MASK)
+		mvneta_txq_pend_desc_add(pp, txq, frags);
+	else
+		txq->pending += frags;
 
-		if (!netdev_xmit_more() || netif_xmit_stopped(nq) ||
-		    txq->pending + frags > MVNETA_TXQ_DEC_SENT_MASK)
-			mvneta_txq_pend_desc_add(pp, txq, frags);
-		else
-			txq->pending += frags;
-
-		u64_stats_update_begin(&stats->syncp);
-		stats->es.ps.tx_bytes += len;
-		stats->es.ps.tx_packets++;
-		u64_stats_update_end(&stats->syncp);
-	} else {
-		dev->stats.tx_dropped++;
-		dev_kfree_skb_any(skb);
-	}
+	u64_stats_update_begin(&stats->syncp);
+	stats->es.ps.tx_bytes += len;
+	stats->es.ps.tx_packets++;
+	u64_stats_update_end(&stats->syncp);
 
 	return 0;
 }
