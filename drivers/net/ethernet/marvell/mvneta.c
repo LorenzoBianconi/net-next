@@ -2316,7 +2316,7 @@ mvneta_swbm_build_skb(struct mvneta_port *pp, struct mvneta_rx_queue *rxq,
 	page_pool_release_page(rxq->page_pool, virt_to_page(xdp->data));
 
 	skb_reserve(skb, xdp->data - xdp->data_hard_start);
-	skb_put(rxq->skb, xdp->data_end - xdp->data);
+	skb_put(skb, xdp->data_end - xdp->data);
 	mvneta_rx_csum(pp, desc_status, skb);
 
 	for (i = 0; i < sinfo->nr_frags; i++) {
