@@ -2235,6 +2235,7 @@ mvneta_swbm_rx_frame(struct mvneta_port *pp,
 	int data_len = -MVNETA_MH_SIZE, len;
 	struct net_device *dev = pp->dev;
 	enum dma_data_direction dma_dir;
+	struct skb_shared_info *sinfo;
 
 	if (MVNETA_SKB_SIZE(rx_desc->data_size) > PAGE_SIZE) {
 		len = MVNETA_MAX_RX_BUF_SIZE;
@@ -2256,6 +2257,9 @@ mvneta_swbm_rx_frame(struct mvneta_port *pp,
 	xdp->data = data + pp->rx_offset_correction + MVNETA_MH_SIZE;
 	xdp->data_end = xdp->data + data_len;
 	xdp_set_data_meta_invalid(xdp);
+
+	sinfo = xdp_data_hard_end(xdp);
+	sinfo->nr_frags = 0;
 
 	*size = rx_desc->data_size - len;
 	rx_desc->buf_phys_addr = 0;
