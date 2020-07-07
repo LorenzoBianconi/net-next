@@ -2252,35 +2252,10 @@ mvneta_swbm_rx_frame(struct mvneta_port *pp,
 	xdp->data_end = xdp->data + data_len;
 	xdp_set_data_meta_invalid(xdp);
 
-	if (xdp_prog) {
+	if (xdp_prog)
 		ret = mvneta_run_xdp(pp, rxq, xdp_prog, xdp, stats);
-		if (ret)
-			goto out;
-	}
-
-	rxq->skb = build_skb(xdp->data_hard_start, PAGE_SIZE);
-	if (unlikely(!rxq->skb)) {
-		struct mvneta_pcpu_stats *stats = this_cpu_ptr(pp->stats);
-
-		netdev_err(dev, "Can't allocate skb on queue %d\n", rxq->id);
-
-		u64_stats_update_begin(&stats->syncp);
-		stats->es.skb_alloc_error++;
-		stats->rx_dropped++;
-		u64_stats_update_end(&stats->syncp);
-
-		return -ENOMEM;
-	}
-	page_pool_release_page(rxq->page_pool, page);
-
-	skb_reserve(rxq->skb,
-		    xdp->data - xdp->data_hard_start);
-	skb_put(rxq->skb, xdp->data_end - xdp->data);
-	mvneta_rx_csum(pp, rx_desc->status, rxq->skb);
 
 	rxq->left_size = rx_desc->data_size - len;
-
-out:
 	rx_desc->buf_phys_addr = 0;
 
 	return ret;
@@ -2290,8 +2265,10 @@ static void
 mvneta_swbm_add_rx_fragment(struct mvneta_port *pp,
 			    struct mvneta_rx_desc *rx_desc,
 			    struct mvneta_rx_queue *rxq,
+			    struct xdp_buff *xdp,
 			    struct page *page)
 {
+	struct skb_shared_info *sinfo = xdp_data_hard_end(xdp);
 	struct net_device *dev = pp->dev;
 	enum dma_data_direction dma_dir;
 	int data_len, len;
@@ -2307,16 +2284,47 @@ mvneta_swbm_add_rx_fragment(struct mvneta_port *pp,
 	dma_sync_single_for_cpu(dev->dev.parent,
 				rx_desc->buf_phys_addr,
 				len, dma_dir);
-	if (data_len > 0) {
-		/* refill descriptor with new buffer later */
-		skb_add_rx_frag(rxq->skb,
-				skb_shinfo(rxq->skb)->nr_frags,
-				page, pp->rx_offset_correction, data_len,
-				PAGE_SIZE);
+
+	if (data_len > 0 && sinfo->nr_frags < MAX_SKB_FRAGS) {
+		skb_frag_t *frag = &sinfo->frags[sinfo->nr_frags];
+
+		frag->bv_offset = pp->rx_offset_correction;
+		skb_frag_size_set(frag, data_len);
+		frag->bv_page = page;
+		sinfo->nr_frags++;
 	}
-	page_pool_release_page(rxq->page_pool, page);
 	rx_desc->buf_phys_addr = 0;
 	rxq->left_size -= len;
+}
+
+static struct sk_buff *
+mvneta_swbm_build_skb(struct mvneta_port *pp, struct mvneta_rx_queue *rxq,
+		      struct xdp_buff *xdp, u32 desc_status)
+{
+	struct skb_shared_info *sinfo = xdp_data_hard_end(xdp);
+	struct sk_buff *skb;
+	int i;
+
+	skb = build_skb(xdp->data_hard_start, PAGE_SIZE);
+	if (!skb)
+		return ERR_PTR(-ENOMEM);
+
+	page_pool_release_page(rxq->page_pool, virt_to_page(xdp->data));
+
+	skb_reserve(skb, xdp->data - xdp->data_hard_start);
+	skb_put(rxq->skb, xdp->data_end - xdp->data);
+	mvneta_rx_csum(pp, desc_status, skb);
+
+	for (i = 0; i < sinfo->nr_frags; i++) {
+		skb_frag_t *frag = &sinfo->frags[i];
+
+		skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags,
+				frag->bv_page, frag->bv_offset,
+				skb_frag_size(frag), PAGE_SIZE);
+		page_pool_release_page(rxq->page_pool, frag->bv_page);
+	}
+
+	return skb;
 }
 
 /* Main rx processing when using software buffer management */
@@ -2329,6 +2337,7 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 	struct mvneta_stats ps = {};
 	struct bpf_prog *xdp_prog;
 	struct xdp_buff xdp_buf;
+	u32 desc_status;
 
 	/* Get number of received packets */
 	rx_todo = mvneta_rxq_busy_desc_num_get(pp, rxq);
@@ -2342,6 +2351,7 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 	while (rx_proc < budget && rx_proc < rx_todo) {
 		struct mvneta_rx_desc *rx_desc = mvneta_rxq_next_desc_get(rxq);
 		u32 rx_status, index;
+		struct sk_buff *skb;
 		struct page *page;
 
 		index = rx_desc - rxq->descs;
@@ -2365,13 +2375,14 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 						   xdp_prog, page, &ps);
 			if (err)
 				continue;
+
+			desc_status = rx_desc->status;
 		} else {
-			if (unlikely(!rxq->skb)) {
-				pr_debug("no skb for rx_status 0x%x\n",
-					 rx_status);
+			if (unlikely(!xdp_buf.data_hard_start))
 				continue;
-			}
-			mvneta_swbm_add_rx_fragment(pp, rx_desc, rxq, page);
+
+			mvneta_swbm_add_rx_fragment(pp, rx_desc, rxq, &xdp_buf,
+						    page);
 		} /* Middle or Last descriptor */
 
 		if (!(rx_status & MVNETA_RXD_LAST_DESC))
@@ -2379,24 +2390,29 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 			continue;
 
 		if (rxq->left_size) {
-			pr_err("get last desc, but left_size (%d) != 0\n",
-			       rxq->left_size);
-			dev_kfree_skb_any(rxq->skb);
+			xdp_buf.data_hard_start = NULL;
 			rxq->left_size = 0;
-			rxq->skb = NULL;
 			continue;
 		}
 
-		ps.rx_bytes += rxq->skb->len;
+		skb = mvneta_swbm_build_skb(pp, rxq, &xdp_buf, desc_status);
+		if (IS_ERR(skb)) {
+			struct mvneta_pcpu_stats *stats = this_cpu_ptr(pp->stats);
+
+			u64_stats_update_begin(&stats->syncp);
+			stats->es.skb_alloc_error++;
+			stats->rx_dropped++;
+			u64_stats_update_end(&stats->syncp);
+			continue;
+		}
+
+		ps.rx_bytes += skb->len;
 		ps.rx_packets++;
 
-		/* Linux processing */
-		rxq->skb->protocol = eth_type_trans(rxq->skb, dev);
+		skb->protocol = eth_type_trans(skb, dev);
+		napi_gro_receive(napi, skb);
 
-		napi_gro_receive(napi, rxq->skb);
-
-		/* clean uncomplete skb pointer in queue */
-		rxq->skb = NULL;
+		xdp_buf.data_hard_start = NULL;
 	}
 	rcu_read_unlock();
 
