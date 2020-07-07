@@ -2216,12 +2216,11 @@ mvneta_run_xdp(struct mvneta_port *pp, struct mvneta_rx_queue *rxq,
 	return ret;
 }
 
-static int
+static void
 mvneta_swbm_rx_frame(struct mvneta_port *pp,
 		     struct mvneta_rx_desc *rx_desc,
 		     struct mvneta_rx_queue *rxq,
 		     struct xdp_buff *xdp,
-		     struct bpf_prog *xdp_prog,
 		     struct page *page,
 		     struct mvneta_stats *stats)
 {
@@ -2229,7 +2228,6 @@ mvneta_swbm_rx_frame(struct mvneta_port *pp,
 	int data_len = -MVNETA_MH_SIZE, len;
 	struct net_device *dev = pp->dev;
 	enum dma_data_direction dma_dir;
-	int ret = 0;
 
 	if (MVNETA_SKB_SIZE(rx_desc->data_size) > PAGE_SIZE) {
 		len = MVNETA_MAX_RX_BUF_SIZE;
@@ -2252,13 +2250,8 @@ mvneta_swbm_rx_frame(struct mvneta_port *pp,
 	xdp->data_end = xdp->data + data_len;
 	xdp_set_data_meta_invalid(xdp);
 
-	if (xdp_prog)
-		ret = mvneta_run_xdp(pp, rxq, xdp_prog, xdp, stats);
-
 	rxq->left_size = rx_desc->data_size - len;
 	rx_desc->buf_phys_addr = 0;
-
-	return ret;
 }
 
 static void
@@ -2362,8 +2355,6 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 		rxq->refill_num++;
 
 		if (rx_status & MVNETA_RXD_FIRST_DESC) {
-			int err;
-
 			/* Check errors only for FIRST descriptor */
 			if (rx_status & MVNETA_RXD_ERR_SUMMARY) {
 				mvneta_rx_error(pp, rx_desc);
@@ -2371,12 +2362,9 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 				continue;
 			}
 
-			err = mvneta_swbm_rx_frame(pp, rx_desc, rxq, &xdp_buf,
-						   xdp_prog, page, &ps);
-			if (err)
-				continue;
-
 			desc_status = rx_desc->status;
+			mvneta_swbm_rx_frame(pp, rx_desc, rxq, &xdp_buf, page,
+					     &ps);
 		} else {
 			if (unlikely(!xdp_buf.data_hard_start))
 				continue;
@@ -2394,6 +2382,10 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 			rxq->left_size = 0;
 			continue;
 		}
+
+		if (xdp_prog &&
+		    mvneta_run_xdp(pp, rxq, xdp_prog, &xdp_buf, &ps))
+			continue;
 
 		skb = mvneta_swbm_build_skb(pp, rxq, &xdp_buf, desc_status);
 		if (IS_ERR(skb)) {
