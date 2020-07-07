@@ -2374,9 +2374,9 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 				continue;
 			}
 
-			frame_sz = rx_desc->data_size - ETH_FCS_LEN;
+			size = rx_desc->data_size;
+			frame_sz = size - ETH_FCS_LEN;
 			desc_status = rx_desc->status;
-			size = frame_sz;
 
 			mvneta_swbm_rx_frame(pp, rx_desc, rxq, &xdp_buf,
 					     &size, page, &ps);
