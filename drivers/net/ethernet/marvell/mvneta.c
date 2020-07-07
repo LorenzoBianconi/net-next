@@ -2306,8 +2306,11 @@ mvneta_swbm_build_skb(struct mvneta_port *pp, struct mvneta_rx_queue *rxq,
 		      struct xdp_buff *xdp, u32 desc_status)
 {
 	struct skb_shared_info *sinfo = xdp_data_hard_end(xdp);
+	int i, num_frags = sinfo->nr_frags;
+	skb_frag_t frags[MAX_SKB_FRAGS];
 	struct sk_buff *skb;
-	int i;
+
+	memcpy(frags, sinfo->frags, sizeof(skb_frag_t) * num_frags);
 
 	skb = build_skb(xdp->data_hard_start, PAGE_SIZE);
 	if (!skb)
@@ -2319,13 +2322,11 @@ mvneta_swbm_build_skb(struct mvneta_port *pp, struct mvneta_rx_queue *rxq,
 	skb_put(skb, xdp->data_end - xdp->data);
 	mvneta_rx_csum(pp, desc_status, skb);
 
-	for (i = 0; i < sinfo->nr_frags; i++) {
-		skb_frag_t *frag = &sinfo->frags[i];
-
+	for (i = 0; i < num_frags; i++) {
 		skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags,
-				frag->bv_page, frag->bv_offset,
-				skb_frag_size(frag), PAGE_SIZE);
-		page_pool_release_page(rxq->page_pool, frag->bv_page);
+				frags[i].bv_page, frags[i].bv_offset,
+				skb_frag_size(&frags[i]), PAGE_SIZE);
+		page_pool_release_page(rxq->page_pool, frags[i].bv_page);
 	}
 
 	return skb;
