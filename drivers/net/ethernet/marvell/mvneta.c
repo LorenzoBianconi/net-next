@@ -698,8 +698,6 @@ struct mvneta_rx_queue {
 	/* Index of first RX DMA descriptor to refill */
 	int first_to_refill;
 	u32 refill_num;
-
-	int left_size;
 };
 
 static enum cpuhp_state online_hpstate;
@@ -2229,7 +2227,7 @@ static void
 mvneta_swbm_rx_frame(struct mvneta_port *pp,
 		     struct mvneta_rx_desc *rx_desc,
 		     struct mvneta_rx_queue *rxq,
-		     struct xdp_buff *xdp,
+		     struct xdp_buff *xdp, int *size,
 		     struct page *page,
 		     struct mvneta_stats *stats)
 {
@@ -2259,7 +2257,7 @@ mvneta_swbm_rx_frame(struct mvneta_port *pp,
 	xdp->data_end = xdp->data + data_len;
 	xdp_set_data_meta_invalid(xdp);
 
-	rxq->left_size = rx_desc->data_size - len;
+	*size = rx_desc->data_size - len;
 	rx_desc->buf_phys_addr = 0;
 }
 
@@ -2267,7 +2265,7 @@ static void
 mvneta_swbm_add_rx_fragment(struct mvneta_port *pp,
 			    struct mvneta_rx_desc *rx_desc,
 			    struct mvneta_rx_queue *rxq,
-			    struct xdp_buff *xdp,
+			    struct xdp_buff *xdp, int *size,
 			    struct page *page)
 {
 	struct skb_shared_info *sinfo = xdp_data_hard_end(xdp);
@@ -2275,11 +2273,11 @@ mvneta_swbm_add_rx_fragment(struct mvneta_port *pp,
 	enum dma_data_direction dma_dir;
 	int data_len, len;
 
-	if (rxq->left_size > MVNETA_MAX_RX_BUF_SIZE) {
+	if (*size > MVNETA_MAX_RX_BUF_SIZE) {
 		len = MVNETA_MAX_RX_BUF_SIZE;
 		data_len = len;
 	} else {
-		len = rxq->left_size;
+		len = *size;
 		data_len = len - ETH_FCS_LEN;
 	}
 	dma_dir = page_pool_get_dma_dir(rxq->page_pool);
@@ -2296,7 +2294,7 @@ mvneta_swbm_add_rx_fragment(struct mvneta_port *pp,
 		sinfo->nr_frags++;
 	}
 	rx_desc->buf_phys_addr = 0;
-	rxq->left_size -= len;
+	*size -= len;
 }
 
 static struct sk_buff *
@@ -2334,7 +2332,7 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 			  struct mvneta_port *pp, int budget,
 			  struct mvneta_rx_queue *rxq)
 {
-	int rx_proc = 0, rx_todo, refill;
+	int rx_proc = 0, rx_todo, refill, size = 0;
 	struct net_device *dev = pp->dev;
 	struct mvneta_stats ps = {};
 	struct bpf_prog *xdp_prog;
@@ -2373,24 +2371,25 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 
 			frame_sz = rx_desc->data_size - ETH_FCS_LEN;
 			desc_status = rx_desc->status;
+			size = frame_sz;
 
-			mvneta_swbm_rx_frame(pp, rx_desc, rxq, &xdp_buf, page,
-					     &ps);
+			mvneta_swbm_rx_frame(pp, rx_desc, rxq, &xdp_buf,
+					     &size, page, &ps);
 		} else {
 			if (unlikely(!xdp_buf.data_hard_start))
 				continue;
 
 			mvneta_swbm_add_rx_fragment(pp, rx_desc, rxq, &xdp_buf,
-						    page);
+						    &size, page);
 		} /* Middle or Last descriptor */
 
 		if (!(rx_status & MVNETA_RXD_LAST_DESC))
 			/* no last descriptor this time */
 			continue;
 
-		if (rxq->left_size) {
+		if (size) {
 			xdp_buf.data_hard_start = NULL;
-			rxq->left_size = 0;
+			size = 0;
 			continue;
 		}
 
@@ -3359,7 +3358,6 @@ static void mvneta_rxq_deinit(struct mvneta_port *pp,
 	rxq->descs_phys        = 0;
 	rxq->first_to_refill   = 0;
 	rxq->refill_num        = 0;
-	rxq->left_size         = 0;
 }
 
 static int mvneta_txq_sw_init(struct mvneta_port *pp,
