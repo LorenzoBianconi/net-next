@@ -2026,6 +2026,21 @@ int mvneta_rx_refill_queue(struct mvneta_port *pp, struct mvneta_rx_queue *rxq)
 	return i;
 }
 
+static void
+mvneta_xdp_release_buff(struct mvneta_port *pp, struct mvneta_rx_queue *rxq,
+			struct xdp_buff *xdp, unsigned int sync_len)
+{
+	struct skb_shared_info *sinfo = xdp_data_hard_end(xdp);
+	struct page *page = virt_to_head_page(xdp->data);
+	int i;
+
+	page_pool_put_page(rxq->page_pool, page, sync_len, true);
+	for (i = 0; i < sinfo->nr_frags; i++) {
+		page = sinfo->frags[i].bv_page;
+		page_pool_put_page(rxq->page_pool, page, 0, true);
+	}
+}
+
 static int
 mvneta_xdp_submit_frame(struct mvneta_port *pp, struct mvneta_tx_queue *txq,
 			struct xdp_frame *xdpf, bool dma_map)
@@ -2158,13 +2173,13 @@ mvneta_xdp_xmit(struct net_device *dev, int num_frame,
 static int
 mvneta_run_xdp(struct mvneta_port *pp, struct mvneta_rx_queue *rxq,
 	       struct bpf_prog *prog, struct xdp_buff *xdp,
-	       struct mvneta_stats *stats)
+	       u32 frame_sz, struct mvneta_stats *stats)
 {
-	unsigned int len, sync;
-	struct page *page;
+	unsigned int len, data_len, sync;
 	u32 ret, act;
 
 	len = xdp->data_end - xdp->data_hard_start - pp->rx_offset_correction;
+	data_len = xdp->data_end - xdp->data;
 	act = bpf_prog_run_xdp(prog, xdp);
 
 	/* Due xdp_adjust_tail: DMA sync for_device cover max len CPU touch */
@@ -2180,9 +2195,8 @@ mvneta_run_xdp(struct mvneta_port *pp, struct mvneta_rx_queue *rxq,
 
 		err = xdp_do_redirect(pp->dev, xdp, prog);
 		if (unlikely(err)) {
+			mvneta_xdp_release_buff(pp, rxq, xdp, sync);
 			ret = MVNETA_XDP_DROPPED;
-			page = virt_to_head_page(xdp->data);
-			page_pool_put_page(rxq->page_pool, page, sync, true);
 		} else {
 			ret = MVNETA_XDP_REDIR;
 			stats->xdp_redirect++;
@@ -2191,10 +2205,8 @@ mvneta_run_xdp(struct mvneta_port *pp, struct mvneta_rx_queue *rxq,
 	}
 	case XDP_TX:
 		ret = mvneta_xdp_xmit_back(pp, xdp);
-		if (ret != MVNETA_XDP_TX) {
-			page = virt_to_head_page(xdp->data);
-			page_pool_put_page(rxq->page_pool, page, sync, true);
-		}
+		if (ret != MVNETA_XDP_TX)
+			mvneta_xdp_release_buff(pp, rxq, xdp, sync);
 		break;
 	default:
 		bpf_warn_invalid_xdp_action(act);
@@ -2203,14 +2215,13 @@ mvneta_run_xdp(struct mvneta_port *pp, struct mvneta_rx_queue *rxq,
 		trace_xdp_exception(pp->dev, prog, act);
 		/* fall through */
 	case XDP_DROP:
-		page = virt_to_head_page(xdp->data);
-		page_pool_put_page(rxq->page_pool, page, sync, true);
+		mvneta_xdp_release_buff(pp, rxq, xdp, sync);
 		ret = MVNETA_XDP_DROPPED;
 		stats->xdp_drop++;
 		break;
 	}
 
-	stats->rx_bytes += xdp->data_end - xdp->data;
+	stats->rx_bytes += frame_sz + xdp->data_end - xdp->data - data_len;
 	stats->rx_packets++;
 
 	return ret;
@@ -2329,8 +2340,8 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 	struct net_device *dev = pp->dev;
 	struct mvneta_stats ps = {};
 	struct bpf_prog *xdp_prog;
+	u32 desc_status, frame_sz;
 	struct xdp_buff xdp_buf;
-	u32 desc_status;
 
 	/* Get number of received packets */
 	rx_todo = mvneta_rxq_busy_desc_num_get(pp, rxq);
@@ -2362,7 +2373,9 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 				continue;
 			}
 
+			frame_sz = rx_desc->data_size - ETH_FCS_LEN;
 			desc_status = rx_desc->status;
+
 			mvneta_swbm_rx_frame(pp, rx_desc, rxq, &xdp_buf, page,
 					     &ps);
 		} else {
@@ -2384,7 +2397,7 @@ static int mvneta_rx_swbm(struct napi_struct *napi,
 		}
 
 		if (xdp_prog &&
-		    mvneta_run_xdp(pp, rxq, xdp_prog, &xdp_buf, &ps))
+		    mvneta_run_xdp(pp, rxq, xdp_prog, &xdp_buf, frame_sz, &ps))
 			continue;
 
 		skb = mvneta_swbm_build_skb(pp, rxq, &xdp_buf, desc_status);
