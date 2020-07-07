@@ -699,8 +699,6 @@ struct mvneta_rx_queue {
 	int first_to_refill;
 	u32 refill_num;
 
-	/* pointer to uncomplete skb buffer */
-	struct sk_buff *skb;
 	int left_size;
 };
 
@@ -3349,9 +3347,6 @@ static void mvneta_rxq_deinit(struct mvneta_port *pp,
 {
 	mvneta_rxq_drop_pkts(pp, rxq);
 
-	if (rxq->skb)
-		dev_kfree_skb_any(rxq->skb);
-
 	if (rxq->descs)
 		dma_free_coherent(pp->dev->dev.parent,
 				  rxq->size * MVNETA_DESC_ALIGNED_SIZE,
@@ -3364,7 +3359,6 @@ static void mvneta_rxq_deinit(struct mvneta_port *pp,
 	rxq->descs_phys        = 0;
 	rxq->first_to_refill   = 0;
 	rxq->refill_num        = 0;
-	rxq->skb               = NULL;
 	rxq->left_size         = 0;
 }
 
