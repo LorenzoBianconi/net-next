@@ -113,6 +113,11 @@ xdp_get_shared_info_from_frame(struct xdp_frame *frame)
 				SKB_DATA_ALIGN(sizeof(struct skb_shared_info)));
 }
 
+struct xdp_cpumap_stats {
+	unsigned int pass;
+	unsigned int drop;
+};
+
 /* Clear kernel pointers in xdp_frame */
 static inline void xdp_scrub_frame(struct xdp_frame *frame)
 {
