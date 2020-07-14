@@ -114,6 +114,7 @@ xdp_get_shared_info_from_frame(struct xdp_frame *frame)
 }
 
 struct xdp_cpumap_stats {
+	unsigned int redirect;
 	unsigned int pass;
 	unsigned int drop;
 };
