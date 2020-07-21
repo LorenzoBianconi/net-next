@@ -63,6 +63,8 @@ int xdp_redirect_prog(struct xdp_md *ctx)
 	long *value;
 	u32 key = 0;
 	u64 nh_off;
+	unsigned char src[] = { 0x7a, 0xcb, 0x47, 0x8d, 0x9f, 0x8f };
+	unsigned char dst[] = { 0xfa, 0xdd, 0x3e, 0xc7, 0xd0, 0x1b };
 
 	nh_off = sizeof(*eth);
 	if (data + nh_off > data_end)
@@ -76,7 +78,8 @@ int xdp_redirect_prog(struct xdp_md *ctx)
 	if (value)
 		*value += 1;
 
-	swap_src_dst_mac(data);
+	memcpy(data, dst, 6);
+	memcpy(data + 6, src, 6);
 	return bpf_redirect(*ifindex, 0);
 }
 
