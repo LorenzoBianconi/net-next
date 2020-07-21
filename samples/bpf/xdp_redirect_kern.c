@@ -63,8 +63,6 @@ int xdp_redirect_prog(struct xdp_md *ctx)
 	long *value;
 	u32 key = 0;
 	u64 nh_off;
-	unsigned char src[] = { 0x7a, 0xcb, 0x47, 0x8d, 0x9f, 0x8f };
-	unsigned char dst[] = { 0xfa, 0xdd, 0x3e, 0xc7, 0xd0, 0x1b };
 
 	nh_off = sizeof(*eth);
 	if (data + nh_off > data_end)
@@ -78,9 +76,47 @@ int xdp_redirect_prog(struct xdp_md *ctx)
 	if (value)
 		*value += 1;
 
-	memcpy(data, dst, 6);
-	memcpy(data + 6, src, 6);
+	swap_src_dst_mac(data);
 	return bpf_redirect(*ifindex, 0);
+}
+
+#define IPERF_PORT	5201
+SEC("xdp_redirect_iperf")
+int xdp_redirect_prog(struct xdp_md *ctx)
+{
+	void *data_end = (void *)(long)ctx->data_end;
+	void *data = (void *)(long)ctx->data;
+	struct ethhdr *eth = data;
+	struct iphdr *iph = (struct iphdr *)(eth + 1);
+	struct tcphdr *tcph = (struct tcphdr *)(iph + 1);
+
+	/* keep the preverivier happy and skip short packets */
+	if (tcph + 1 > (struct tcphdr *)data_end)
+		return XDP_PASS;
+
+	/* skip non TCP packets */
+	if (eth->h_proto != ntohs(ETH_P_IP) || iph->protocol != IPPROTO_TCP)
+		return XDP_PASS;
+
+	if (tcph->dest == ntohs(IPERF_PORT)) {
+		unsigned char dst[] = { 0xfa, 0xdd, 0x3e, 0xc7, 0xd0, 0x1b };
+		int *ifindex, port = 0;
+		u32 key = 0;
+		long *value;
+
+		ifindex = bpf_map_lookup_elem(&tx_port, &port);
+		if (!ifindex)
+			return XDP_DROP;
+
+		value = bpf_map_lookup_elem(&rxcnt, &key);
+		if (value)
+			*value += 1;
+
+		memcpy(data, dst, 6);
+		return bpf_redirect(*ifindex, 0);
+	}
+
+	return XDP_PASS;
 }
 
 /* Redirect require an XDP bpf_prog loaded on the TX device */
