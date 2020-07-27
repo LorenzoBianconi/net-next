@@ -3591,6 +3591,18 @@ union bpf_attr {
  *
  *	Return
  *		0 on success, or a negative error in case of failure.
+ *
+ * int bpf_xdp_get_frag_count(struct xdp_buff *xdp_md)
+ *	Description
+ *		Get the total number of frags for a given packet.
+ *	Return
+ *		The number of frags
+ *
+ * int bpf_xdp_get_frags_total_size(struct xdp_buff *xdp_md)
+ *	Description
+ *		Get the total size of frags for a given packet.
+ *	Return
+ *		The total size of frags for a given packet.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -3743,6 +3755,8 @@ union bpf_attr {
 	FN(d_path),			\
 	FN(copy_from_user),		\
 	FN(xdp_adjust_mb_header),	\
+	FN(xdp_get_frag_count),		\
+	FN(xdp_get_frags_total_size),	\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
