@@ -3395,6 +3395,17 @@ union bpf_attr {
  *		A non-negative value equal to or less than *size* on success,
  *		or a negative error in case of failure.
  *
+ * int bpf_xdp_get_frag(struct xdp_buff *xdp_md, u32 frag_index, u32 *size, u32 *offset)
+ * 	Description
+ *		Get the offset from containing page and size of a given frag.
+ * 	Return
+ * 		0 on success, or a negative error in case of failure.
+ *
+ * int bpf_xdp_get_frag_count(struct xdp_buff *xdp_md)
+ * 	Description
+ *		Get the total number of frags for a given packet.
+ * 	Return
+ * 		The number of frags
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -3539,6 +3550,8 @@ union bpf_attr {
 	FN(skc_to_tcp_request_sock),	\
 	FN(skc_to_udp6_sock),		\
 	FN(get_task_stack),		\
+	FN(xdp_get_frag),		\
+	FN(xdp_get_frag_count),		\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
