@@ -3475,6 +3475,57 @@ static const struct bpf_func_proto bpf_xdp_adjust_head_proto = {
 	.arg2_type	= ARG_ANYTHING,
 };
 
+BPF_CALL_2(bpf_xdp_adjust_mb_header, struct  xdp_buff *, xdp,
+	   int, offset)
+{
+	void *data_hard_end, *data_end;
+	struct skb_shared_info *sinfo;
+	int frag_offset, frag_len;
+	u8 *addr;
+
+	if (!xdp->mb)
+		return -ENOTSUPP;
+
+	sinfo = xdp_get_shared_info_from_buff(xdp);
+
+	frag_len = skb_frag_size(&sinfo->frags[0]);
+	if (offset > frag_len)
+		return -EINVAL;
+
+	frag_offset = skb_frag_off(&sinfo->frags[0]);
+	data_end = xdp->data_end + offset;
+
+	if (offset < 0 && (-offset > frag_offset ||
+			   data_end < xdp->data + ETH_HLEN))
+		return -EINVAL;
+
+	data_hard_end = xdp_data_hard_end(xdp); /* use xdp->frame_sz */
+	if (data_end > data_hard_end)
+		return -EINVAL;
+
+	addr = page_address(skb_frag_page(&sinfo->frags[0])) + frag_offset;
+	if (offset > 0) {
+		memcpy(xdp->data_end, addr, offset);
+	} else {
+		memcpy(addr + offset, xdp->data_end + offset, -offset);
+		memset(xdp->data_end + offset, 0, -offset);
+	}
+
+	skb_frag_size_sub(&sinfo->frags[0], offset);
+	skb_frag_off_add(&sinfo->frags[0], offset);
+	xdp->data_end = data_end;
+
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_xdp_adjust_mb_header_proto = {
+	.func		= bpf_xdp_adjust_mb_header,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_ANYTHING,
+};
+
 BPF_CALL_2(bpf_xdp_adjust_tail, struct xdp_buff *, xdp, int, offset)
 {
 	void *data_hard_end = xdp_data_hard_end(xdp); /* use xdp->frame_sz */
@@ -6174,6 +6225,7 @@ bool bpf_helper_changes_pkt_data(void *func)
 	    func == bpf_msg_push_data ||
 	    func == bpf_msg_pop_data ||
 	    func == bpf_xdp_adjust_tail ||
+	    func == bpf_xdp_adjust_mb_header ||
 #if IS_ENABLED(CONFIG_IPV6_SEG6_BPF)
 	    func == bpf_lwt_seg6_store_bytes ||
 	    func == bpf_lwt_seg6_adjust_srh ||
@@ -6501,6 +6553,8 @@ xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_xdp_redirect_map_proto;
 	case BPF_FUNC_xdp_adjust_tail:
 		return &bpf_xdp_adjust_tail_proto;
+	case BPF_FUNC_xdp_adjust_mb_header:
+		return &bpf_xdp_adjust_mb_header_proto;
 	case BPF_FUNC_fib_lookup:
 		return &bpf_xdp_fib_lookup_proto;
 #ifdef CONFIG_INET
