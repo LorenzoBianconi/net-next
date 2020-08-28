@@ -3475,6 +3475,71 @@ static const struct bpf_func_proto bpf_xdp_adjust_head_proto = {
 	.arg2_type	= ARG_ANYTHING,
 };
 
+BPF_CALL_3(bpf_xdp_adjust_frag_offset, struct  xdp_buff *, xdp,
+	   int, index, int, offset)
+{
+	struct skb_shared_info *sinfo;
+	u8 *addr;
+	int len;
+
+	if (!xdp->mb)
+		return -EINVAL;
+
+	sinfo = xdp_get_shared_info_from_buff(xdp);
+	if (index >= sinfo->nr_frags)
+		return -EINVAL;
+
+	addr = page_address(skb_frag_page(&sinfo->frags[index]));
+	len = skb_frag_size(&sinfo->frags[index]);
+
+	if (offset < 0 || (addr + offset > addr + len))
+		return -EINVAL;
+
+	skb_frag_off_set(&sinfo->frags[index], offset);
+
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_xdp_adjust_frag_offset_proto = {
+	.func		= bpf_xdp_adjust_frag_offset,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_3(bpf_xdp_adjust_frag_len, struct  xdp_buff *, xdp,
+	   int, index, int, len)
+{
+	struct skb_shared_info *sinfo;
+	int offset;
+
+	if (!xdp->mb)
+		return -EINVAL;
+
+	sinfo = xdp_get_shared_info_from_buff(xdp);
+	if (index >= sinfo->nr_frags)
+		return -EINVAL;
+
+	offset = skb_frag_off(&sinfo->frags[index]);
+	if (len < 0 || (offset + len > PAGE_SIZE))
+		return -EINVAL;
+
+	skb_frag_size_set(&sinfo->frags[index], len);
+
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_xdp_adjust_frag_len_proto = {
+	.func		= bpf_xdp_adjust_frag_len,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_ANYTHING,
+};
+
 BPF_CALL_1(bpf_xdp_get_frag_count, struct  xdp_buff*, xdp)
 {
 	struct skb_shared_info *sinfo = xdp_get_shared_info_from_buff(xdp);
@@ -6218,6 +6283,8 @@ bool bpf_helper_changes_pkt_data(void *func)
 	    func == bpf_msg_push_data ||
 	    func == bpf_msg_pop_data ||
 	    func == bpf_xdp_adjust_tail ||
+	    func == bpf_xdp_adjust_frag_offset ||
+	    func == bpf_xdp_adjust_frag_len ||
 #if IS_ENABLED(CONFIG_IPV6_SEG6_BPF)
 	    func == bpf_lwt_seg6_store_bytes ||
 	    func == bpf_lwt_seg6_adjust_srh ||
@@ -6545,6 +6612,10 @@ xdp_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_xdp_redirect_map_proto;
 	case BPF_FUNC_xdp_adjust_tail:
 		return &bpf_xdp_adjust_tail_proto;
+	case BPF_FUNC_xdp_adjust_frag_offset:
+		return &bpf_xdp_adjust_frag_offset_proto;
+	case BPF_FUNC_xdp_adjust_frag_len:
+		return &bpf_xdp_adjust_frag_len_proto;
 	case BPF_FUNC_xdp_get_frag_count:
 		return &bpf_xdp_get_frag_count_proto;
 	case BPF_FUNC_xdp_get_frag:

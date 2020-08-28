@@ -3395,6 +3395,34 @@ union bpf_attr {
  *		A non-negative value equal to or less than *size* on success,
  *		or a negative error in case of failure.
  *
+ * long bpf_xdp_adjust_frag_offset(struct xdp_buff *xdp_md, int index, int offset)
+ * 	Description
+ * 		Adjust skb_frag_t offset of fragment with index *index* in a
+ * 		xdp multi-buffr. This helper can be used to prepare the packet
+ * 		for pushing or popping headers.
+ *
+ * 		A call to this helper is susceptible to change the underlying
+ * 		packet buffer. Therefore, at load time, all checks on pointers
+ * 		previously done by the verifier are invalidated and must be
+ * 		performed again, if the helper is used in combination with
+ * 		direct packet access.
+ * 	Return
+ * 		0 on success, or a negative error in case of failure.
+ *
+ * long bpf_xdp_adjust_frag_len(struct xdp_buff *xdp_md, int index, int len)
+ * 	Description
+ * 		Adjust skb_frag_t length of fragment with index *index* in a
+ * 		xdp multi-buffr. It is possible to both shrink and grow the
+ * 		fragment tail.
+ *
+ * 		A call to this helper is susceptible to change the underlying
+ * 		packet buffer. Therefore, at load time, all checks on pointers
+ * 		previously done by the verifier are invalidated and must be
+ * 		performed again, if the helper is used in combination with
+ * 		direct packet access.
+ * 	Return
+ * 		0 on success, or a negative error in case of failure.
+ *
  * int bpf_xdp_get_frag(struct xdp_buff *xdp_md, u32 frag_index, u32 *size, u32 *offset)
  * 	Description
  *		Get the offset from containing page and size of a given frag.
@@ -3550,6 +3578,8 @@ union bpf_attr {
 	FN(skc_to_tcp_request_sock),	\
 	FN(skc_to_udp6_sock),		\
 	FN(get_task_stack),		\
+	FN(xdp_adjust_frag_offset),	\
+	FN(xdp_adjust_frag_len),	\
 	FN(xdp_get_frag),		\
 	FN(xdp_get_frag_count),		\
 	/* */
