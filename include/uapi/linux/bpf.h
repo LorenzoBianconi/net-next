@@ -3571,11 +3571,25 @@ union bpf_attr {
  *		value.
  *
  * long bpf_copy_from_user(void *dst, u32 size, const void *user_ptr)
- * 	Description
- * 		Read *size* bytes from user space address *user_ptr* and store
- * 		the data in *dst*. This is a wrapper of copy_from_user().
- * 	Return
- * 		0 on success, or a negative error in case of failure.
+ *	Description
+ *		Read *size* bytes from user space address *user_ptr* and store
+ *		the data in *dst*. This is a wrapper of copy_from_user().
+ *
+ * long bpf_xdp_adjust_mb_header(struct xdp_buff *xdp_md, int offset)
+ *	Description
+ *		Adjust frame headers moving *offset* bytes from/to the second
+ *		buffer to/from the first one. This helper can be used to move
+ *		headers when the hw DMA SG does not copy all the headers in
+ *		the first fragment.
+ *
+ *		A call to this helper is susceptible to change the underlying
+ *		packet buffer. Therefore, at load time, all checks on pointers
+ *		previously done by the verifier are invalidated and must be
+ *		performed again, if the helper is used in combination with
+ *		direct packet access.
+ *
+ *	Return
+ *		0 on success, or a negative error in case of failure.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -3727,6 +3741,7 @@ union bpf_attr {
 	FN(inode_storage_delete),	\
 	FN(d_path),			\
 	FN(copy_from_user),		\
+	FN(xdp_adjust_mb_header),	\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
