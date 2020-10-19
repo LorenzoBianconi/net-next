@@ -11,6 +11,8 @@
 #include <linux/device.h>
 
 #include <net/page_pool.h>
+#include <net/xdp.h>
+
 #include <linux/dma-direction.h>
 #include <linux/dma-mapping.h>
 #include <linux/page-flags.h>
@@ -407,6 +409,39 @@ void page_pool_put_page(struct page_pool *pool, struct page *page,
 	put_page(page);
 }
 EXPORT_SYMBOL(page_pool_put_page);
+
+void page_pool_put_page_bulk(struct page_pool *pool, void **data,
+			     int count)
+{
+	int i, len = 0;
+
+	for (i = 0; i < count; i++) {
+		struct page *page = virt_to_head_page(data[i]);
+
+		if (likely(page_ref_count(page) == 1 &&
+			   pool_page_reusable(pool, page))) {
+			if (pool->p.flags & PP_FLAG_DMA_SYNC_DEV)
+				page_pool_dma_sync_for_device(pool, page, -1);
+
+			/* bulk pages for ptr_ring cache */
+			data[len++] = page;
+		} else {
+			page_pool_release_page(pool, page);
+			put_page(page);
+		}
+	}
+
+	/* Grab the producer spinlock for concurrent access to
+	 * ptr_ring page_pool cache
+	 */
+	page_pool_ring_lock(pool);
+	for (i = 0; i < len; i++) {
+		if (__ptr_ring_produce(&pool->ring, data[i]))
+			page_pool_return_page(pool, data[i]);
+	}
+	page_pool_ring_unlock(pool);
+}
+EXPORT_SYMBOL(page_pool_put_page_bulk);
 
 static void page_pool_empty_ring(struct page_pool *pool)
 {
