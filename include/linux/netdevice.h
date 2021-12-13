@@ -49,6 +49,7 @@
 #include <linux/hashtable.h>
 #include <linux/rbtree.h>
 #include <net/net_trackers.h>
+#include <net/flow_offload.h>
 
 struct netpoll_info;
 struct device;
@@ -874,10 +875,7 @@ struct net_device_path {
 			u16		vlan_id;
 			__be16		vlan_proto;
 		} bridge;
-		struct {
-			int port;
-			u16 proto;
-		} dsa;
+		struct flow_offload_action_dsa dsa;
 	};
 };
 

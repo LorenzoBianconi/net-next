@@ -127,35 +127,22 @@ mtk_flow_mangle_ipv4(const struct flow_action_entry *act,
 }
 
 static int
-mtk_flow_get_dsa_port(struct net_device **dev)
-{
-#if IS_ENABLED(CONFIG_NET_DSA)
-	struct dsa_port *dp;
-
-	dp = dsa_port_from_netdev(*dev);
-	if (IS_ERR(dp))
-		return -ENODEV;
-
-	if (dp->cpu_dp->tag_ops->proto != DSA_TAG_PROTO_MTK)
-		return -ENODEV;
-
-	*dev = dp->cpu_dp->master;
-
-	return dp->index;
-#else
-	return -ENODEV;
-#endif
-}
-
-static int
 mtk_flow_set_output_device(struct mtk_eth *eth, struct mtk_foe_entry *foe,
+			   struct flow_offload_hw_action *offload_act,
 			   struct net_device *dev)
 {
-	int pse_port, dsa_port;
+	int pse_port;
 
-	dsa_port = mtk_flow_get_dsa_port(&dev);
-	if (dsa_port >= 0)
-		mtk_foe_entry_set_dsa(foe, dsa_port);
+	switch (offload_act->type) {
+	case FLOW_OFFLOAD_HW_ACTION_DSA:
+		if (offload_act->act.dsa.proto != DSA_TAG_PROTO_MTK)
+			break;
+
+		mtk_foe_entry_set_dsa(foe, offload_act->act.dsa.port);
+		break;
+	default:
+		break;
+	}
 
 	if (dev == eth->netdev[0])
 		pse_port = 1;
@@ -326,7 +313,7 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f)
 	if (data.pppoe.num == 1)
 		mtk_foe_entry_set_pppoe(&foe, data.pppoe.sid);
 
-	err = mtk_flow_set_output_device(eth, &foe, odev);
+	err = mtk_flow_set_output_device(eth, &foe, f->act, odev);
 	if (err)
 		return err;
 

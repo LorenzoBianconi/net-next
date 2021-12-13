@@ -837,8 +837,10 @@ static int nf_flow_offload_tuple(struct nf_flowtable *flowtable,
 
 	nf_flow_offload_init(&cls_flow, proto, priority, cmd,
 			     &flow->tuplehash[dir].tuple, &extack);
-	if (cmd == FLOW_CLS_REPLACE)
+	if (cmd == FLOW_CLS_REPLACE) {
 		cls_flow.rule = flow_rule->rule;
+		cls_flow.act = &flow->tuplehash[dir].tuple.out.offload_act;
+	}
 
 	down_read(&flowtable->flow_block_lock);
 	list_for_each_entry(block_cb, block_cb_list, list) {

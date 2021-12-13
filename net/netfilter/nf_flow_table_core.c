@@ -136,6 +136,16 @@ static int flow_offload_fill_route(struct flow_offload *flow,
 	}
 	flow_tuple->xmit_type = route->tuple[dir].xmit_type;
 
+	switch (route->tuple[dir].out.offload_act.type) {
+	case FLOW_OFFLOAD_HW_ACTION_DSA:
+		memcpy(&flow_tuple->out.offload_act,
+		       &route->tuple[dir].out.offload_act,
+		       sizeof(struct flow_offload_hw_action));
+		break;
+	default:
+		break;
+	}
+
 	return 0;
 }
 

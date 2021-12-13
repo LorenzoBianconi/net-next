@@ -547,6 +547,7 @@ struct flow_cls_offload {
 	enum flow_cls_command command;
 	unsigned long cookie;
 	struct flow_rule *rule;
+	struct flow_offload_hw_action *act;
 	struct flow_stats stats;
 	u32 classid;
 };
@@ -567,6 +568,23 @@ struct flow_offload_action {
 };
 
 struct flow_offload_action *offload_action_alloc(unsigned int num_actions);
+
+struct flow_offload_action_dsa {
+	int port;
+	u16 proto;
+};
+
+enum flow_offload_hw_action_type {
+	FLOW_OFFLOAD_HW_ACTION_UNSPEC = 0,
+	FLOW_OFFLOAD_HW_ACTION_DSA,
+};
+
+struct flow_offload_hw_action {
+	enum flow_offload_hw_action_type type;
+	union {
+		struct flow_offload_action_dsa dsa;
+	} act;
+};
 
 static inline struct flow_rule *
 flow_cls_offload_flow_rule(struct flow_cls_offload *flow_cmd)

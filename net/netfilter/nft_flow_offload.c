@@ -67,6 +67,7 @@ struct nft_forward_info {
 	const struct net_device *indev;
 	const struct net_device *outdev;
 	const struct net_device *hw_outdev;
+	const struct flow_offload_action_dsa *act_dsa;
 	struct id {
 		__u16	id;
 		__be16	proto;
@@ -101,6 +102,8 @@ static void nft_dev_path_info(const struct net_device_path_stack *stack,
 		switch (path->type) {
 		case DEV_PATH_ETHERNET:
 		case DEV_PATH_DSA:
+			info->act_dsa = &path->dsa;
+			fallthrough;
 		case DEV_PATH_VLAN:
 		case DEV_PATH_PPPOE:
 			info->indev = path->dev;
@@ -179,6 +182,20 @@ static bool nft_flowtable_find_dev(const struct net_device *dev,
 	return found;
 }
 
+static void nft_dev_fill_hw_offload_act(struct nf_flow_route *route,
+					enum ip_conntrack_dir dir,
+					struct nft_forward_info *info)
+{
+	if (info->act_dsa) {
+		struct flow_offload_hw_action *offload_act;
+
+		offload_act = &route->tuple[dir].out.offload_act;
+		offload_act->type = FLOW_OFFLOAD_HW_ACTION_DSA;
+		memcpy(&offload_act->act.dsa, info->act_dsa,
+		       sizeof(struct flow_offload_action_dsa));
+	}
+}
+
 static void nft_dev_forward_path(struct nf_flow_route *route,
 				 const struct nf_conn *ct,
 				 enum ip_conntrack_dir dir,
@@ -211,6 +228,7 @@ static void nft_dev_forward_path(struct nf_flow_route *route,
 		route->tuple[dir].out.hw_ifindex = info.hw_outdev->ifindex;
 		route->tuple[dir].xmit_type = info.xmit_type;
 	}
+	nft_dev_fill_hw_offload_act(route, dir, &info);
 }
 
 static int nft_flow_route(const struct nft_pktinfo *pkt,
