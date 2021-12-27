@@ -378,7 +378,7 @@ static int
 mtk_flow_offload_stats(struct mtk_eth *eth, struct flow_cls_offload *f)
 {
 	struct mtk_flow_entry *entry;
-	int timestamp;
+	int timestamp, err;
 	u32 idle;
 
 	entry = rhashtable_lookup(&eth->flow_table, &f->cookie,
@@ -389,6 +389,10 @@ mtk_flow_offload_stats(struct mtk_eth *eth, struct flow_cls_offload *f)
 	timestamp = mtk_foe_entry_timestamp(&eth->ppe, entry->hash);
 	if (timestamp < 0)
 		return -ETIMEDOUT;
+
+	err = mtk_foe_entry_get_offload_stats(&eth->ppe, entry->hash, f);
+	if (err < 0)
+		return err;
 
 	idle = mtk_eth_timestamp(eth) - timestamp;
 	f->stats.lastused = jiffies - idle * HZ;

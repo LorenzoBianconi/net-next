@@ -6,6 +6,7 @@
 
 #include <linux/kernel.h>
 #include <linux/bitfield.h>
+#include <net/flow_offload.h>
 
 #define MTK_ETH_PPE_BASE		0xc00
 
@@ -48,6 +49,7 @@ enum {
 #define MTK_FOE_IB2_DEST_PORT		GENMASK(7, 5)
 #define MTK_FOE_IB2_MULTICAST		BIT(8)
 
+#define MTK_FOE_IB2_WHNAT_MIBF		BIT(10)
 #define MTK_FOE_IB2_WHNAT_QID2		GENMASK(13, 12)
 #define MTK_FOE_IB2_WHNAT_DEVIDX	BIT(16)
 #define MTK_FOE_IB2_WHNAT_NAT		BIT(17)
@@ -206,6 +208,14 @@ struct mtk_foe_entry {
 	};
 };
 
+struct mtk_mib_entry {
+	u32 byte_count_low;
+	u16 byte_count_high;
+	u32 pkt_count_low;
+	u8 pkt_count_high;
+	u8 rsv[5];
+} __packed;
+
 enum {
 	MTK_PPE_CPU_REASON_TTL_EXCEEDED			= 0x02,
 	MTK_PPE_CPU_REASON_OPTION_HEADER		= 0x03,
@@ -242,6 +252,9 @@ struct mtk_ppe {
 
 	struct mtk_foe_entry *foe_table;
 	dma_addr_t foe_phys;
+
+	struct mtk_mib_entry *mib_table;
+	dma_addr_t mib_phys;
 
 	void *acct_table;
 };
@@ -283,6 +296,8 @@ int mtk_foe_entry_set_vlan(struct mtk_foe_entry *entry, int vid);
 int mtk_foe_entry_set_pppoe(struct mtk_foe_entry *entry, int sid);
 int mtk_foe_entry_commit(struct mtk_ppe *ppe, struct mtk_foe_entry *entry,
 			 u16 timestamp);
+int mtk_foe_entry_get_offload_stats(struct mtk_ppe *ppe, u16 hash,
+				    struct flow_cls_offload *f);
 int mtk_ppe_debugfs_init(struct mtk_ppe *ppe);
 
 #endif

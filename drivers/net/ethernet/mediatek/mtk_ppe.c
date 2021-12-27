@@ -139,6 +139,31 @@ mtk_foe_entry_ib2(struct mtk_foe_entry *entry)
 	return &entry->ipv4.ib2;
 }
 
+static void mtk_foe_entry_set_mibf(struct mtk_foe_entry *entry)
+{
+	if (IS_ENABLED(CONFIG_SOC_MT7621) || IS_ENABLED(CONFIG_SOC_MT7620))
+		return;
+
+	switch (FIELD_GET(MTK_FOE_IB1_PACKET_TYPE, entry->ib1)) {
+		case MTK_PPE_PKT_TYPE_IPV4_ROUTE:
+		case MTK_PPE_PKT_TYPE_IPV4_HNAPT:
+			entry->ipv4.ib2 |= MTK_FOE_IB2_WHNAT_MIBF;
+			break;
+		case MTK_PPE_PKT_TYPE_IPV6_ROUTE_3T:
+		case MTK_PPE_PKT_TYPE_IPV6_ROUTE_5T:
+			entry->ipv6.ib2 |= MTK_FOE_IB2_WHNAT_MIBF;
+			break;
+		case MTK_PPE_PKT_TYPE_IPV4_DSLITE:
+			entry->dslite.ib2 |= MTK_FOE_IB2_WHNAT_MIBF;
+			break;
+		case MTK_PPE_PKT_TYPE_IPV6_6RD:
+			entry->ipv6_6rd.ib2 |= MTK_FOE_IB2_WHNAT_MIBF;
+			break;
+		default:
+			break;
+	}
+}
+
 int mtk_foe_entry_prepare(struct mtk_foe_entry *entry, int type, int l4proto,
 			  u8 pse_port, u8 *src_mac, u8 *dest_mac)
 {
@@ -174,6 +199,7 @@ int mtk_foe_entry_prepare(struct mtk_foe_entry *entry, int type, int l4proto,
 		entry->ipv4.ib2 = val;
 		l2 = &entry->ipv4.l2;
 	}
+	mtk_foe_entry_set_mibf(entry);
 
 	l2->dest_mac_hi = get_unaligned_be32(dest_mac);
 	l2->dest_mac_lo = get_unaligned_be16(dest_mac + 4);
@@ -329,6 +355,30 @@ int mtk_foe_entry_set_pppoe(struct mtk_foe_entry *entry, int sid)
 	return 0;
 }
 
+int mtk_foe_entry_get_offload_stats(struct mtk_ppe *ppe, u16 hash,
+				    struct flow_cls_offload *f)
+{
+	int err;
+	u32 val;
+
+	ppe_w32(ppe, MTK_PPE_MIB_SER_CR, hash | MTK_PPE_MIB_SER_START);
+	err = readl_poll_timeout(ppe->base + MTK_PPE_MIB_SER_CR, val,
+				 !(val & MTK_PPE_MIB_SER_START), 20, 10000);
+	if (err < 0)
+		return err;
+
+	/* bytes count */
+	f->stats.bytes += ppe_r32(ppe, MTK_PPE_MIB_SER_R0);
+	val = ppe_r32(ppe, MTK_PPE_MIB_SER_R1);
+	f->stats.bytes += FIELD_GET(MTK_PPE_MIB_SER_R1_BYTE_CNT, val) << 32;
+	/* pkts count */
+	f->stats.pkts += FIELD_GET(MTK_PPE_MIB_SER_R1_PKT_CNT, val);
+	val = ppe_r32(ppe, MTK_PPE_MIB_SER_R2);
+	f->stats.pkts += FIELD_GET(MTK_PPE_MIB_SER_R2_PKT_CNT, val) << 16;
+
+	return 0;
+}
+
 static inline bool mtk_foe_entry_usable(struct mtk_foe_entry *entry)
 {
 	return !(entry->ib1 & MTK_FOE_IB1_STATIC) &&
@@ -369,6 +419,7 @@ int mtk_foe_entry_commit(struct mtk_ppe *ppe, struct mtk_foe_entry *entry,
 int mtk_ppe_init(struct mtk_ppe *ppe, struct device *dev, void __iomem *base,
 		 int version)
 {
+	struct mtk_mib_entry *mib;
 	struct mtk_foe_entry *foe;
 
 	/* need to allocate a separate device, since it PPE DMA access is
@@ -384,6 +435,14 @@ int mtk_ppe_init(struct mtk_ppe *ppe, struct device *dev, void __iomem *base,
 		return -ENOMEM;
 
 	ppe->foe_table = foe;
+
+	mib = dmam_alloc_coherent(ppe->dev, MTK_PPE_ENTRIES * sizeof(*mib),
+				  &ppe->mib_phys, GFP_KERNEL);
+	if (!mib)
+		return -ENOMEM;
+
+	memset(mib, 0, MTK_PPE_ENTRIES * sizeof(*mib));
+	ppe->mib_table = mib;
 
 	mtk_ppe_debugfs_init(ppe);
 
@@ -478,6 +537,12 @@ int mtk_ppe_start(struct mtk_ppe *ppe)
 	ppe_w32(ppe, MTK_PPE_GLO_CFG, val);
 
 	ppe_w32(ppe, MTK_PPE_DEFAULT_CPU_PORT, 0);
+
+	/* init MIB counters */
+	ppe_w32(ppe, MTK_PPE_MIB_TB_BASE, ppe->mib_phys);
+	ppe_set(ppe, MTK_PPE_MIB_CFG,
+		MTK_PPE_MIB_CFG_EN | MTK_PPE_MIB_CFG_RD_CLR);
+	ppe_set(ppe, MTK_PPE_MIB_CACHE_CTL, MTK_PPE_MIB_CACHE_CTL_EN);
 
 	return 0;
 }
