@@ -68,6 +68,7 @@ struct nft_forward_info {
 	const struct net_device *outdev;
 	const struct net_device *hw_outdev;
 	const struct flow_offload_action_dsa *act_dsa;
+	const struct flow_offload_action_wdma *act_wdma;
 	struct id {
 		__u16	id;
 		__be16	proto;
@@ -150,6 +151,9 @@ static void nft_dev_path_info(const struct net_device_path_stack *stack,
 			}
 			info->xmit_type = FLOW_OFFLOAD_XMIT_DIRECT;
 			break;
+		case DEV_PATH_WDMA:
+			info->act_wdma = &path->wdma;
+			break;
 		default:
 			info->indev = NULL;
 			break;
@@ -186,13 +190,17 @@ static void nft_dev_fill_hw_offload_act(struct nf_flow_route *route,
 					enum ip_conntrack_dir dir,
 					struct nft_forward_info *info)
 {
-	if (info->act_dsa) {
-		struct flow_offload_hw_action *offload_act;
+	struct flow_offload_hw_action *offload_act;
 
-		offload_act = &route->tuple[dir].out.offload_act;
+	offload_act = &route->tuple[dir].out.offload_act;
+	if (info->act_dsa) {
 		offload_act->type = FLOW_OFFLOAD_HW_ACTION_DSA;
 		memcpy(&offload_act->act.dsa, info->act_dsa,
 		       sizeof(struct flow_offload_action_dsa));
+	} else if (info->act_wdma) {
+		offload_act->type = FLOW_OFFLOAD_HW_ACTION_WDMA;
+		memcpy(&offload_act->act.wdma, info->act_wdma,
+		       sizeof(struct flow_offload_action_wdma));
 	}
 }
 

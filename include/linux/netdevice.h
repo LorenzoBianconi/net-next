@@ -854,6 +854,7 @@ enum net_device_path_type {
 	DEV_PATH_BRIDGE,
 	DEV_PATH_PPPOE,
 	DEV_PATH_DSA,
+	DEV_PATH_WDMA,
 };
 
 struct net_device_path {
@@ -876,6 +877,7 @@ struct net_device_path {
 			__be16		vlan_proto;
 		} bridge;
 		struct flow_offload_action_dsa dsa;
+		struct flow_offload_action_wdma wdma;
 	};
 };
 

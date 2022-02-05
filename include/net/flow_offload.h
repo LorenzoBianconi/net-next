@@ -574,15 +574,24 @@ struct flow_offload_action_dsa {
 	u16 proto;
 };
 
+struct flow_offload_action_wdma {
+	u8 wdma_idx;
+	u8 queue;
+	u8 bss;
+	u8 wcid;
+};
+
 enum flow_offload_hw_action_type {
 	FLOW_OFFLOAD_HW_ACTION_UNSPEC = 0,
 	FLOW_OFFLOAD_HW_ACTION_DSA,
+	FLOW_OFFLOAD_HW_ACTION_WDMA,
 };
 
 struct flow_offload_hw_action {
 	enum flow_offload_hw_action_type type;
 	union {
 		struct flow_offload_action_dsa dsa;
+		struct flow_offload_action_wdma wdma;
 	} act;
 };
 

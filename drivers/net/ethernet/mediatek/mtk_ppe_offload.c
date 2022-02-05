@@ -10,6 +10,7 @@
 #include <net/pkt_cls.h>
 #include <net/dsa.h>
 #include "mtk_eth_soc.h"
+#include "mtk_wed.h"
 
 struct mtk_flow_data {
 	struct ethhdr eth;
@@ -39,6 +40,7 @@ struct mtk_flow_entry {
 	struct rhash_head node;
 	unsigned long cookie;
 	u16 hash;
+	s8 wed_index;
 };
 
 static const struct rhashtable_params mtk_flow_ht_params = {
@@ -129,7 +131,7 @@ mtk_flow_mangle_ipv4(const struct flow_action_entry *act,
 static int
 mtk_flow_set_output_device(struct mtk_eth *eth, struct mtk_foe_entry *foe,
 			   struct flow_offload_hw_action *offload_act,
-			   struct net_device *dev)
+			   struct net_device *dev, int *wed_index)
 {
 	int pse_port;
 
@@ -140,6 +142,14 @@ mtk_flow_set_output_device(struct mtk_eth *eth, struct mtk_foe_entry *foe,
 
 		mtk_foe_entry_set_dsa(foe, offload_act->act.dsa.port);
 		break;
+	case FLOW_OFFLOAD_HW_ACTION_WDMA:
+		mtk_foe_entry_set_wdma(foe, offload_act->act.wdma.wdma_idx,
+				       offload_act->act.wdma.queue,
+				       offload_act->act.wdma.bss,
+				       offload_act->act.wdma.wcid);
+		*wed_index = offload_act->act.wdma.wdma_idx;
+		mtk_foe_entry_set_pse_port(foe, 3);
+		return 0;
 	default:
 		break;
 	}
@@ -166,6 +176,7 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f)
 	struct net_device *odev = NULL;
 	struct mtk_flow_entry *entry;
 	int offload_type = 0;
+	int wed_index = -1;
 	u16 addr_type = 0;
 	u32 timestamp;
 	u8 l4proto = 0;
@@ -313,8 +324,11 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f)
 	if (data.pppoe.num == 1)
 		mtk_foe_entry_set_pppoe(&foe, data.pppoe.sid);
 
-	err = mtk_flow_set_output_device(eth, &foe, f->act, odev);
+	err = mtk_flow_set_output_device(eth, &foe, f->act, odev, &wed_index);
 	if (err)
+		return err;
+
+	if (wed_index >= 0 && (err = mtk_wed_flow_add(wed_index)) < 0)
 		return err;
 
 	entry = kzalloc(sizeof(*entry), GFP_KERNEL);
@@ -330,6 +344,7 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f)
 	}
 
 	entry->hash = hash;
+	entry->wed_index = wed_index;
 	err = rhashtable_insert_fast(&eth->flow_table, &entry->node,
 				     mtk_flow_ht_params);
 	if (err < 0)
@@ -340,6 +355,9 @@ clear_flow:
 	mtk_foe_entry_clear(&eth->ppe, hash);
 free:
 	kfree(entry);
+	if (wed_index >= 0)
+	    mtk_wed_flow_remove(wed_index);
+
 	return err;
 }
 
@@ -356,6 +374,8 @@ mtk_flow_offload_destroy(struct mtk_eth *eth, struct flow_cls_offload *f)
 	mtk_foe_entry_clear(&eth->ppe, entry->hash);
 	rhashtable_remove_fast(&eth->flow_table, &entry->node,
 			       mtk_flow_ht_params);
+	if (entry->wed_index >= 0)
+		mtk_wed_flow_remove(entry->wed_index);
 	kfree(entry);
 
 	return 0;
