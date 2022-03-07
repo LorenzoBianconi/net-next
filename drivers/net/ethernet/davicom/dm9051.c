@@ -804,7 +804,7 @@ static int dm9051_loop_rx(struct board_info *db)
 		skb->protocol = eth_type_trans(skb, db->ndev);
 		if (db->ndev->features & NETIF_F_RXCSUM)
 			skb_checksum_none_assert(skb);
-		netif_rx_ni(skb);
+		netif_rx(skb);
 		db->ndev->stats.rx_bytes += rxlen;
 		db->ndev->stats.rx_packets++;
 		scanrr++;
@@ -1225,15 +1225,13 @@ static int dm9051_probe(struct spi_device *spi)
 	return 0;
 }
 
-static int dm9051_drv_remove(struct spi_device *spi)
+static void dm9051_drv_remove(struct spi_device *spi)
 {
 	struct device *dev = &spi->dev;
 	struct net_device *ndev = dev_get_drvdata(dev);
 	struct board_info *db = to_dm9051_board(ndev);
 
 	phy_disconnect(db->phydev);
-
-	return 0;
 }
 
 static const struct of_device_id dm9051_match_table[] = {

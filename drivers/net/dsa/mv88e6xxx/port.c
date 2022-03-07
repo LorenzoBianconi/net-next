@@ -550,6 +550,9 @@ static int mv88e6xxx_port_set_cmode(struct mv88e6xxx_chip *chip, int port,
 		mode = PHY_INTERFACE_MODE_1000BASEX;
 
 	switch (mode) {
+	case PHY_INTERFACE_MODE_RMII:
+		cmode = MV88E6XXX_PORT_STS_CMODE_RMII;
+		break;
 	case PHY_INTERFACE_MODE_1000BASEX:
 		cmode = MV88E6XXX_PORT_STS_CMODE_1000BASEX;
 		break;
@@ -610,6 +613,8 @@ static int mv88e6xxx_port_set_cmode(struct mv88e6xxx_chip *chip, int port,
 		chip->ports[port].cmode = cmode;
 
 		lane = mv88e6xxx_serdes_get_lane(chip, port);
+		if (lane == -ENODEV)
+			return 0;
 		if (lane < 0)
 			return lane;
 
