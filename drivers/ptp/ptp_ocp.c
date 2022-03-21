@@ -972,7 +972,7 @@ ptp_ocp_verify(struct ptp_clock_info *ptp_info, unsigned pin,
 
 	switch (func) {
 	case PTP_PF_NONE:
-		sprintf(buf, "IN: None");
+		snprintf(buf, sizeof(buf), "IN: None");
 		break;
 	case PTP_PF_EXTTS:
 		/* Allow timestamps, but require sysfs configuration. */
@@ -982,9 +982,9 @@ ptp_ocp_verify(struct ptp_clock_info *ptp_info, unsigned pin,
 		 * channels 1..4 are the frequency generators.
 		 */
 		if (chan)
-			sprintf(buf, "OUT: GEN%d", chan);
+			snprintf(buf, sizeof(buf), "OUT: GEN%d", chan);
 		else
-			sprintf(buf, "OUT: PHC");
+			snprintf(buf, sizeof(buf), "OUT: PHC");
 		break;
 	default:
 		return -EOPNOTSUPP;
@@ -2983,11 +2983,12 @@ ptp_ocp_summary_show(struct seq_file *s, void *data)
 {
 	struct device *dev = s->private;
 	struct ptp_system_timestamp sts;
-	u16 sma_val[4][2], ctrl, val;
 	struct ts_reg __iomem *ts_reg;
 	struct timespec64 ts;
 	struct ptp_ocp *bp;
+	u16 sma_val[4][2];
 	char *src, *buf;
+	u32 ctrl, val;
 	bool on, map;
 	int i;
 
