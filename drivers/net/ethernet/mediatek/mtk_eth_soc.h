@@ -35,6 +35,7 @@ enum mtk_reg_base {
 #define MTK_MAX_RX_LENGTH	1536
 #define MTK_MAX_RX_LENGTH_2K	2048
 #define MTK_TX_DMA_BUF_LEN	0x3fff
+#define MTK_TX_DMA_BUF_LEN_V2	0xffff
 #define MTK_DMA_SIZE		512
 #define MTK_MAC_COUNT		2
 #define MTK_RX_ETH_HLEN		(ETH_HLEN + ETH_FCS_LEN)
@@ -92,6 +93,10 @@ enum mtk_reg_base {
 #define MTK_CDMQ_IG_CTRL	0x1400
 #define MTK_CDMQ_STAG_EN	BIT(0)
 
+/* CDMP Ingress Control Register */
+#define MTK_CDMP_IG_CTRL	0x400
+#define MTK_CDMP_STAG_EN	BIT(0)
+
 /* CDMP Exgress Control Register */
 #define MTK_CDMP_EG_CTRL	0x404
 
@@ -110,6 +115,28 @@ enum mtk_reg_base {
 
 /* Unicast Filter MAC Address Register - High */
 #define MTK_GDMA_MAC_ADRH(x)	(0x50C + (x * 0x1000))
+
+/* FE global misc reg*/
+#define MTK_FE_GLO_MISC         0x124
+
+/* PSE Free Queue Flow Control  */
+#define PSE_FQFC_CFG1		0x100
+#define PSE_FQFC_CFG2		0x104
+#define PSE_DROP_CFG		0x108
+
+/* PSE Input Queue Reservation Register*/
+#define PSE_IQ_REV(x)		(0x140 + (((x) - 1) << 2))
+
+/* PSE Output Queue Threshold Register*/
+#define PSE_OQ_TH(x)		(0x160 + (((x) - 1) << 2))
+
+/* GDM and CDM Threshold */
+#define MTK_GDM2_THRES		0x1530
+#define MTK_CDMW0_THRES		0x164c
+#define MTK_CDMW1_THRES		0x1650
+#define MTK_CDME0_THRES		0x1654
+#define MTK_CDME1_THRES		0x1658
+#define MTK_CDMM_THRES		0x165c
 
 /* PDMA RX Base Pointer Register */
 #define MTK_PRX_BASE_PTR0	(eth->soc->reg_map[MTK_PDMA_BASE] + 0x100)
@@ -131,9 +158,12 @@ enum mtk_reg_base {
 #define MTK_PDMA_LRO_CTRL_DW0		(eth->soc->reg_map[MTK_PDMA_LRO_CTRL])
 #define MTK_LRO_EN			BIT(0)
 #define MTK_L3_CKS_UPD_EN		BIT(7)
+#define MTK_L3_CKS_UPD_EN_V2		BIT(19)
 #define MTK_LRO_ALT_PKT_CNT_MODE	BIT(21)
 #define MTK_LRO_RING_RELINQUISH_REQ	(0x7 << 26)
+#define MTK_LRO_RING_RELINQUISH_REQ_V2	(0xf << 24)
 #define MTK_LRO_RING_RELINQUISH_DONE	(0x7 << 29)
+#define MTK_LRO_RING_RELINQUISH_DONE_V2	(0xf << 28)
 
 #define MTK_PDMA_LRO_CTRL_DW1	(eth->soc->reg_map[MTK_PDMA_LRO_CTRL] + 0x04)
 #define MTK_PDMA_LRO_CTRL_DW2	(eth->soc->reg_map[MTK_PDMA_LRO_CTRL] + 0x08)
@@ -158,6 +188,7 @@ enum mtk_reg_base {
 
 /* PDMA Global Configuration Register */
 #define MTK_PDMA_GLO_CFG	(eth->soc->reg_map[MTK_PDMA_BASE] + 0x204)
+#define MTK_RX_DMA_LRO_EN	BIT(8)
 #define MTK_MULTI_EN		BIT(10)
 #define MTK_PDMA_SIZE_8DWORDS	(1 << 4)
 
@@ -261,6 +292,13 @@ enum mtk_reg_base {
 #define MTK_TX_DMA_EN		BIT(0)
 #define MTK_DMA_BUSY_TIMEOUT_US	1000000
 
+/* QDMA V2 Global Configuration Register */
+#define MTK_CHK_DDONE_EN	BIT(28)
+#define MTK_DMAD_WR_WDONE	BIT(26)
+#define MTK_WCOMP_EN		BIT(24)
+#define MTK_RESV_BUF		(0x40 << 16)
+#define MTK_MUTLI_CNT		(0x4 << 12)
+
 /* QDMA Reset Index Register */
 #define MTK_QDMA_RST_IDX	(eth->soc->reg_map[MTK_QDMA_BASE] + 0x208)
 
@@ -287,6 +325,8 @@ enum mtk_reg_base {
 #define MTK_TX_DONE_INT0	BIT(0)
 #define MTK_RX_DONE_INT		MTK_RX_DONE_DLY
 #define MTK_TX_DONE_INT		MTK_TX_DONE_DLY
+
+#define MTK_RX_DONE_INT_V2	BIT(14)
 
 /* QDMA Interrupt grouping registers */
 #define MTK_QDMA_INT_GRP1	(eth->soc->reg_map[MTK_QDMA_BASE] + 0x220)
@@ -340,6 +380,25 @@ enum mtk_reg_base {
 #define MTK_GDM1_TX_GPCNT	(eth->soc->reg_map[MTK_GDM1_TX_STAT_BASE] + 0x38)
 #define MTK_STAT_OFFSET		0x40
 
+/* QDMA TX NUM */
+#define MTK_QDMA_TX_NUM		16
+#define MTK_QDMA_TX_MASK	(MTK_QDMA_TX_NUM - 1)
+#define QID_BITS_V2(x)		(((x) & 0x3f) << 16)
+#define MTK_QDMA_GMAC2_QID	8
+
+#define MTK_TX_DMA_BUF_SHIFT	8
+
+/* QDMA V2 descriptor txd6 */
+#define TX_DMA_INS_VLAN_V2	BIT(16)
+/* QDMA V2 descriptor txd5 */
+#define TX_DMA_CHKSUM_V2	(0x7 << 28)
+#define TX_DMA_TSO_V2		BIT(31)
+
+/* QDMA V2 descriptor txd4 */
+#define TX_DMA_FPORT_SHIFT_V2	8
+#define TX_DMA_FPORT_MASK_V2	0xf
+#define TX_DMA_SWC_V2		BIT(30)
+
 #define MTK_WDMA0_BASE		0x2800
 #define MTK_WDMA1_BASE		0x2c00
 
@@ -353,10 +412,9 @@ enum mtk_reg_base {
 /* QDMA descriptor txd3 */
 #define TX_DMA_OWNER_CPU	BIT(31)
 #define TX_DMA_LS0		BIT(30)
-#define TX_DMA_PLEN0(_x)	(((_x) & MTK_TX_DMA_BUF_LEN) << 16)
-#define TX_DMA_PLEN1(_x)	((_x) & MTK_TX_DMA_BUF_LEN)
+#define TX_DMA_PLEN0(_x)	(((_x) & eth->soc->txrx.dma_max_len) << eth->soc->txrx.dma_len_offset)
+#define TX_DMA_PLEN1(_x)	((_x) & eth->soc->txrx.dma_max_len)
 #define TX_DMA_SWC		BIT(14)
-#define TX_DMA_SDL(_x)		(((_x) & 0x3fff) << 16)
 
 /* PDMA on MT7628 */
 #define TX_DMA_DONE		BIT(31)
@@ -366,12 +424,14 @@ enum mtk_reg_base {
 /* QDMA descriptor rxd2 */
 #define RX_DMA_DONE		BIT(31)
 #define RX_DMA_LSO		BIT(30)
-#define RX_DMA_PLEN0(_x)	(((_x) & 0x3fff) << 16)
-#define RX_DMA_GET_PLEN0(_x)	(((_x) >> 16) & 0x3fff)
+#define RX_DMA_PREP_PLEN0(_x)	(((_x) & eth->soc->txrx.dma_max_len) << eth->soc->txrx.dma_len_offset)
+#define RX_DMA_GET_PLEN0(_x)	(((_x) >> eth->soc->txrx.dma_len_offset) & eth->soc->txrx.dma_max_len)
 #define RX_DMA_VTAG		BIT(15)
 
 /* QDMA descriptor rxd3 */
-#define RX_DMA_VID(_x)		((_x) & 0xfff)
+#define RX_DMA_VID(x)		((x) & VLAN_VID_MASK)
+#define RX_DMA_TCI(x)		((x) & (VLAN_PRIO_MASK | VLAN_VID_MASK))
+#define RX_DMA_VPID(x)		(((x) >> 16) & 0xffff)
 
 /* QDMA descriptor rxd4 */
 #define MTK_RXD4_FOE_ENTRY	GENMASK(13, 0)
@@ -382,9 +442,14 @@ enum mtk_reg_base {
 /* QDMA descriptor rxd4 */
 #define RX_DMA_L4_VALID		BIT(24)
 #define RX_DMA_L4_VALID_PDMA	BIT(30)		/* when PDMA is used */
-#define RX_DMA_FPORT_SHIFT	19
-#define RX_DMA_FPORT_MASK	0x7
 #define RX_DMA_SPECIAL_TAG	BIT(22)
+
+#define RX_DMA_GET_SPORT(x)	(((x) >> 19) & 0xf)
+#define RX_DMA_GET_SPORT_V2(x)	(((x) >> 26) & 0x7)
+
+/* PDMA V2 descriptor rxd3 */
+#define RX_DMA_VTAG_V2		BIT(0)
+#define RX_DMA_L4_VALID_V2	BIT(2)
 
 /* PHY Indirect Access Control registers */
 #define MTK_PHY_IAC		0x10004
@@ -509,6 +574,16 @@ enum mtk_reg_base {
 #define ETHSYS_TRGMII_MT7621_DDR_PLL	BIT(5)
 
 /* ethernet reset control register */
+#define ETHSYS_RSTCTRL			0x34
+#define RSTCTRL_FE			BIT(6)
+#define RSTCTRL_PPE			BIT(31)
+#define RSTCTRL_PPE1			BIT(30)
+#define RSTCTRL_ETH			BIT(23)
+
+/* ethernet reset check idle register */
+#define ETHSYS_FE_RST_CHK_IDLE_EN	0x28
+
+/* ethernet reset control register */
 #define ETHSYS_RSTCTRL		0x34
 #define RSTCTRL_FE		BIT(6)
 #define RSTCTRL_PPE		BIT(31)
@@ -592,11 +667,33 @@ struct mtk_rx_dma {
 	unsigned int rxd4;
 } __packed __aligned(4);
 
+struct mtk_rx_dma_v2 {
+	unsigned int rxd1;
+	unsigned int rxd2;
+	unsigned int rxd3;
+	unsigned int rxd4;
+	unsigned int rxd5;
+	unsigned int rxd6;
+	unsigned int rxd7;
+	unsigned int rxd8;
+} __packed __aligned(4);
+
 struct mtk_tx_dma {
 	unsigned int txd1;
 	unsigned int txd2;
 	unsigned int txd3;
 	unsigned int txd4;
+} __packed __aligned(4);
+
+struct mtk_tx_dma_v2 {
+	unsigned int txd1;
+	unsigned int txd2;
+	unsigned int txd3;
+	unsigned int txd4;
+	unsigned int txd5;
+	unsigned int txd6;
+	unsigned int txd7;
+	unsigned int txd8;
 } __packed __aligned(4);
 
 struct mtk_eth;
@@ -785,7 +882,9 @@ enum mkt_eth_capabilities {
 	MTK_SHARED_INT_BIT,
 	MTK_TRGMII_MT7621_CLK_BIT,
 	MTK_QDMA_BIT,
+	MTK_NETSYS_V2_BIT,
 	MTK_SOC_MT7628_BIT,
+	MTK_RSTCTRL_PPE1_BIT,
 
 	/* MUX BITS*/
 	MTK_ETH_MUX_GDM1_TO_GMAC1_ESW_BIT,
@@ -817,7 +916,9 @@ enum mkt_eth_capabilities {
 #define MTK_SHARED_INT		BIT(MTK_SHARED_INT_BIT)
 #define MTK_TRGMII_MT7621_CLK	BIT(MTK_TRGMII_MT7621_CLK_BIT)
 #define MTK_QDMA		BIT(MTK_QDMA_BIT)
+#define MTK_NETSYS_V2		BIT(MTK_NETSYS_V2_BIT)
 #define MTK_SOC_MT7628		BIT(MTK_SOC_MT7628_BIT)
+#define MTK_RSTCTRL_PPE1	BIT(MTK_RSTCTRL_PPE1_BIT)
 
 #define MTK_ETH_MUX_GDM1_TO_GMAC1_ESW		\
 	BIT(MTK_ETH_MUX_GDM1_TO_GMAC1_ESW_BIT)
@@ -894,6 +995,7 @@ struct mtk_tx_dma_desc_info {
 	dma_addr_t addr;
 	u32 size;
 	u16 vlan_tci;
+	u16 qid;
 	u8 gso:1;
 	u8 csum:1;
 	u8 vlan:1;
@@ -913,7 +1015,11 @@ struct mtk_tx_dma_desc_info {
  * @required_pctl		A bool value to show whether the SoC requires
  *				the extra setup for those pins used by GMAC.
  * @txd_size			TX DMA descriptor size.
- * @rxd_size			RX DMA descriptor size.
+ * @rxd_size			Rx DMA descriptor size.
+ * @rx_irq_done_mask		Rx irq done register mask.
+ * @rx_dma_l4_valid		Rx DMA valid register mask.
+ * @dma_max_len			Max DMA tx/rx buffer length.
+ * @dma_len_offset		Tx/Rx DMA length field offset.
  */
 struct mtk_soc_data {
 	const u32	*reg_map;
@@ -926,6 +1032,10 @@ struct mtk_soc_data {
 	struct {
 		u32	txd_size;
 		u32	rxd_size;
+		u32	rx_irq_done_mask;
+		u32	rx_dma_l4_valid;
+		u32	dma_max_len;
+		u32	dma_len_offset;
 	} txrx;
 };
 
@@ -1046,7 +1156,6 @@ struct mtk_eth {
 
 	u32				tx_int_mask_reg;
 	u32				tx_int_status_reg;
-	u32				rx_dma_l4_valid;
 	int				ip_align;
 
 	struct mtk_ppe			*ppe;
