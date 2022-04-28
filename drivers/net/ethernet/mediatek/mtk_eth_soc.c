@@ -45,6 +45,17 @@ static const u32 mtk_reg_map[] = {
 	[MTK_PDMA_RSS_GLO_BASE]			= 0x3000,
 };
 
+static const u32 mt7986_reg_map[] = {
+	[MTK_PDMA_BASE]				= 0x6000,
+	[MTK_PDMA_LRO_CTRL]			= 0x6408,
+	[MTK_PDMA_ALT_SCORE_DELTA_BASE]		= 0x641c,
+	[MTK_PDMA_LRO_RX_RING_DIP_BASE]		= 0x6414,
+	[MTK_PDMA_LRO_RX_RING_CTRL_BASE]	= 0x6438,
+	[MTK_QDMA_BASE]				= 0x4400,
+	[MTK_GDM1_TX_STAT_BASE]			= 0x1c00,
+	[MTK_PDMA_RSS_GLO_BASE]			= 0x6800,
+};
+
 /* strings used by ethtool */
 static const struct mtk_ethtool_stats {
 	char str[ETH_GSTRING_LEN];
@@ -68,7 +79,7 @@ static const char * const mtk_clks_source_name[] = {
 	"ethif", "sgmiitop", "esw", "gp0", "gp1", "gp2", "fe", "trgpll",
 	"sgmii_tx250m", "sgmii_rx250m", "sgmii_cdr_ref", "sgmii_cdr_fb",
 	"sgmii2_tx250m", "sgmii2_rx250m", "sgmii2_cdr_ref", "sgmii2_cdr_fb",
-	"sgmii_ck", "eth2pll",
+	"sgmii_ck", "eth2pll", "wocpu0", "wocpu1", "netsys0", "netsys1"
 };
 
 void mtk_w32(struct mtk_eth *eth, u32 val, unsigned reg)
@@ -3625,6 +3636,21 @@ static const struct mtk_soc_data mt7629_data = {
 	},
 };
 
+static const struct mtk_soc_data mt7986_data = {
+	.reg_map = mt7986_reg_map,
+	.ana_rgc3 = 0x128,
+	.caps = MT7986_CAPS,
+	.required_clks = MT7986_CLKS_BITMAP,
+	.required_pctl = false,
+	.txrx = {
+		.txd_size = sizeof(struct mtk_tx_dma_v2),
+		.rxd_size = sizeof(struct mtk_rx_dma_v2),
+		.rx_irq_done_mask = MTK_RX_DONE_INT_V2,
+		.dma_max_len = MTK_TX_DMA_BUF_LEN_V2,
+		.dma_len_offset = 8,
+	},
+};
+
 static const struct mtk_soc_data rt5350_data = {
 	.reg_map = mtk_reg_map,
 	.caps = MT7628_CAPS,
@@ -3647,6 +3673,7 @@ const struct of_device_id of_mtk_match[] = {
 	{ .compatible = "mediatek,mt7622-eth", .data = &mt7622_data},
 	{ .compatible = "mediatek,mt7623-eth", .data = &mt7623_data},
 	{ .compatible = "mediatek,mt7629-eth", .data = &mt7629_data},
+	{ .compatible = "mediatek,mt7986-eth", .data = &mt7986_data},
 	{ .compatible = "ralink,rt5350-eth", .data = &rt5350_data},
 	{},
 };
