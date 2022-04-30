@@ -99,6 +99,9 @@
 /* Unicast Filter MAC Address Register - High */
 #define MTK_GDMA_MAC_ADRH(x)	(0x50C + (x * 0x1000))
 
+/* Internal SRAM offset */
+#define MTK_ETH_SRAM_OFFSET	0x40000
+
 /* PDMA RX Base Pointer Register */
 #define MTK_PRX_BASE_PTR0	0x900
 #define MTK_PRX_BASE_PTR_CFG(x)	(MTK_PRX_BASE_PTR0 + (x * 0x10))
@@ -739,6 +742,7 @@ enum mkt_eth_capabilities {
 	MTK_SHARED_INT_BIT,
 	MTK_TRGMII_MT7621_CLK_BIT,
 	MTK_QDMA_BIT,
+	MTK_SRAM_BIT,
 	MTK_SOC_MT7628_BIT,
 
 	/* MUX BITS*/
@@ -771,6 +775,7 @@ enum mkt_eth_capabilities {
 #define MTK_SHARED_INT		BIT(MTK_SHARED_INT_BIT)
 #define MTK_TRGMII_MT7621_CLK	BIT(MTK_TRGMII_MT7621_CLK_BIT)
 #define MTK_QDMA		BIT(MTK_QDMA_BIT)
+#define MTK_SRAM		BIT(MTK_SRAM_BIT)
 #define MTK_SOC_MT7628		BIT(MTK_SOC_MT7628_BIT)
 
 #define MTK_ETH_MUX_GDM1_TO_GMAC1_ESW		\

@@ -790,10 +790,13 @@ static int mtk_init_fq_dma(struct mtk_eth *eth)
 	dma_addr_t dma_addr;
 	int i;
 
-	eth->scratch_ring = dma_alloc_coherent(eth->dma_dev,
-					       cnt * soc->txrx.txd_size,
-					       &eth->phy_scratch_ring,
-					       GFP_ATOMIC);
+	if (MTK_HAS_CAPS(soc->caps, MTK_SRAM))
+		eth->scratch_ring = eth->base + MTK_ETH_SRAM_OFFSET;
+	else
+		eth->scratch_ring = dma_alloc_coherent(eth->dma_dev,
+						       cnt * soc->txrx.txd_size,
+						       &eth->phy_scratch_ring,
+						       GFP_ATOMIC);
 	if (unlikely(!eth->scratch_ring))
 		return -ENOMEM;
 
@@ -1588,9 +1591,16 @@ static int mtk_tx_alloc(struct mtk_eth *eth)
 	if (!ring->buf)
 		goto no_tx_mem;
 
-	ring->dma = dma_alloc_coherent(eth->dma_dev,
-				       MTK_DMA_SIZE * soc->txrx.txd_size,
-				       &ring->phys, GFP_ATOMIC);
+	if (MTK_HAS_CAPS(soc->caps, MTK_SRAM)) {
+		ring->dma =  (void *)eth->scratch_ring +
+			     MTK_DMA_SIZE * soc->txrx.txd_size;
+		ring->phys = eth->phy_scratch_ring +
+			     MTK_DMA_SIZE * soc->txrx.txd_size;
+	} else {
+		ring->dma = dma_alloc_coherent(eth->dma_dev,
+				MTK_DMA_SIZE * soc->txrx.txd_size,
+				&ring->phys, GFP_ATOMIC);
+	}
 	if (!ring->dma)
 		goto no_tx_mem;
 
@@ -1669,7 +1679,7 @@ static void mtk_tx_clean(struct mtk_eth *eth)
 		ring->buf = NULL;
 	}
 
-	if (ring->dma) {
+	if (!MTK_HAS_CAPS(soc->caps, MTK_SRAM) && ring->dma) {
 		dma_free_coherent(eth->dma_dev,
 				  MTK_DMA_SIZE * soc->txrx.txd_size,
 				  ring->dma, ring->phys);
@@ -1686,6 +1696,7 @@ static void mtk_tx_clean(struct mtk_eth *eth)
 
 static int mtk_rx_alloc(struct mtk_eth *eth, int ring_no, int rx_flag)
 {
+	const struct mtk_soc_data *soc = eth->soc;
 	struct mtk_rx_ring *ring;
 	int rx_data_len, rx_dma_size;
 	int i;
@@ -1721,9 +1732,20 @@ static int mtk_rx_alloc(struct mtk_eth *eth, int ring_no, int rx_flag)
 			return -ENOMEM;
 	}
 
-	ring->dma = dma_alloc_coherent(eth->dma_dev,
-				       rx_dma_size * eth->soc->txrx.rxd_size,
-				       &ring->phys, GFP_ATOMIC);
+	if (MTK_HAS_CAPS(soc->caps, MTK_SRAM) &&
+	    rx_flag == MTK_RX_FLAGS_NORMAL) {
+		struct mtk_tx_ring *tx_ring = &eth->tx_ring;
+
+		ring->dma = (void *)tx_ring->dma +
+			    MTK_DMA_SIZE * (ring_no + 1) * soc->txrx.txd_size;
+		ring->phys = tx_ring->phys +
+			     MTK_DMA_SIZE * soc->txrx.txd_size * (ring_no + 1);
+	} else {
+		ring->dma = dma_alloc_coherent(eth->dma_dev,
+					       rx_dma_size * soc->txrx.rxd_size,
+					       &ring->phys, GFP_ATOMIC);
+	}
+
 	if (!ring->dma)
 		return -ENOMEM;
 
@@ -1737,10 +1759,10 @@ static int mtk_rx_alloc(struct mtk_eth *eth, int ring_no, int rx_flag)
 		if (unlikely(dma_mapping_error(eth->dma_dev, dma_addr)))
 			return -ENOMEM;
 
-		rxd = (void *)ring->dma + i * eth->soc->txrx.rxd_size;
+		rxd = (void *)ring->dma + i * soc->txrx.rxd_size;
 		rxd->rxd1 = (unsigned int)dma_addr;
 
-		if (MTK_HAS_CAPS(eth->soc->caps, MTK_SOC_MT7628))
+		if (MTK_HAS_CAPS(soc->caps, MTK_SOC_MT7628))
 			rxd->rxd2 = RX_DMA_LSO;
 		else
 			rxd->rxd2 = RX_DMA_PLEN0(ring->buf_size);
@@ -1765,7 +1787,8 @@ static int mtk_rx_alloc(struct mtk_eth *eth, int ring_no, int rx_flag)
 	return 0;
 }
 
-static void mtk_rx_clean(struct mtk_eth *eth, struct mtk_rx_ring *ring)
+static void mtk_rx_clean(struct mtk_eth *eth, struct mtk_rx_ring *ring,
+			 bool sram)
 {
 	int i;
 
@@ -1788,7 +1811,7 @@ static void mtk_rx_clean(struct mtk_eth *eth, struct mtk_rx_ring *ring)
 		ring->data = NULL;
 	}
 
-	if (ring->dma) {
+	if (ring->dma && !sram) {
 		dma_free_coherent(eth->dma_dev,
 				  ring->dma_size * eth->soc->txrx.rxd_size,
 				  ring->dma, ring->phys);
@@ -2141,7 +2164,7 @@ static void mtk_dma_free(struct mtk_eth *eth)
 	for (i = 0; i < MTK_MAC_COUNT; i++)
 		if (eth->netdev[i])
 			netdev_reset_queue(eth->netdev[i]);
-	if (eth->scratch_ring) {
+	if (!MTK_HAS_CAPS(soc->caps, MTK_SRAM) && eth->scratch_ring) {
 		dma_free_coherent(eth->dma_dev,
 				  MTK_DMA_SIZE * soc->txrx.txd_size,
 				  eth->scratch_ring, eth->phy_scratch_ring);
@@ -2149,13 +2172,13 @@ static void mtk_dma_free(struct mtk_eth *eth)
 		eth->phy_scratch_ring = 0;
 	}
 	mtk_tx_clean(eth);
-	mtk_rx_clean(eth, &eth->rx_ring[0]);
-	mtk_rx_clean(eth, &eth->rx_ring_qdma);
+	mtk_rx_clean(eth, &eth->rx_ring[0], true);
+	mtk_rx_clean(eth, &eth->rx_ring_qdma, false);
 
 	if (eth->hwlro) {
 		mtk_hwlro_rx_uninit(eth);
 		for (i = 1; i < MTK_MAX_RX_RING_NUM; i++)
-			mtk_rx_clean(eth, &eth->rx_ring[i]);
+			mtk_rx_clean(eth, &eth->rx_ring[i], false);
 	}
 
 	kfree(eth->scratch_head);
@@ -3134,6 +3157,16 @@ static int mtk_probe(struct platform_device *pdev)
 	eth->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(eth->base))
 		return PTR_ERR(eth->base);
+
+	if (MTK_HAS_CAPS(eth->soc->caps, MTK_SRAM)) {
+		struct resource *res;
+
+		res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+		if (!res)
+			return -EINVAL;
+
+		eth->phy_scratch_ring = res->start + MTK_ETH_SRAM_OFFSET;
+	}
 
 	if (MTK_HAS_CAPS(eth->soc->caps, MTK_QDMA)) {
 		eth->tx_int_mask_reg = MTK_QDMA_INT_MASK;
