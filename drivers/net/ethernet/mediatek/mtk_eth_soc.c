@@ -34,6 +34,17 @@ MODULE_PARM_DESC(msg_level, "Message level (-1=defaults,0=none,...,16=all)");
 #define MTK_ETHTOOL_STAT(x) { #x, \
 			      offsetof(struct mtk_hw_stats, x) / sizeof(u64) }
 
+static const u32 mtk_reg_map[] = {
+	[MTK_PDMA_BASE]				= 0x0800,
+	[MTK_PDMA_LRO_CTRL]			= 0x0980,
+	[MTK_PDMA_ALT_SCORE_DELTA_BASE]		= 0x0a4c,
+	[MTK_PDMA_LRO_RX_RING_DIP_BASE]		= 0x0b04,
+	[MTK_PDMA_LRO_RX_RING_CTRL_BASE]	= 0x0b28,
+	[MTK_QDMA_BASE]				= 0x1800,
+	[MTK_GDM1_TX_STAT_BASE]			= 0x2400,
+	[MTK_PDMA_RSS_GLO_BASE]			= 0x3000,
+};
+
 /* strings used by ethtool */
 static const struct mtk_ethtool_stats {
 	char str[ETH_GSTRING_LEN];
@@ -3376,6 +3387,7 @@ static int mtk_remove(struct platform_device *pdev)
 }
 
 static const struct mtk_soc_data mt2701_data = {
+	.reg_map = mtk_reg_map,
 	.caps = MT7623_CAPS | MTK_HWLRO,
 	.hw_features = MTK_HW_FEATURES,
 	.required_clks = MT7623_CLKS_BITMAP,
@@ -3387,6 +3399,7 @@ static const struct mtk_soc_data mt2701_data = {
 };
 
 static const struct mtk_soc_data mt7621_data = {
+	.reg_map = mtk_reg_map,
 	.caps = MT7621_CAPS,
 	.hw_features = MTK_HW_FEATURES,
 	.required_clks = MT7621_CLKS_BITMAP,
@@ -3399,6 +3412,7 @@ static const struct mtk_soc_data mt7621_data = {
 };
 
 static const struct mtk_soc_data mt7622_data = {
+	.reg_map = mtk_reg_map,
 	.ana_rgc3 = 0x2028,
 	.caps = MT7622_CAPS | MTK_HWLRO,
 	.hw_features = MTK_HW_FEATURES,
@@ -3412,6 +3426,7 @@ static const struct mtk_soc_data mt7622_data = {
 };
 
 static const struct mtk_soc_data mt7623_data = {
+	.reg_map = mtk_reg_map,
 	.caps = MT7623_CAPS | MTK_HWLRO,
 	.hw_features = MTK_HW_FEATURES,
 	.required_clks = MT7623_CLKS_BITMAP,
@@ -3424,6 +3439,7 @@ static const struct mtk_soc_data mt7623_data = {
 };
 
 static const struct mtk_soc_data mt7629_data = {
+	.reg_map = mtk_reg_map,
 	.ana_rgc3 = 0x128,
 	.caps = MT7629_CAPS | MTK_HWLRO,
 	.hw_features = MTK_HW_FEATURES,
@@ -3436,6 +3452,7 @@ static const struct mtk_soc_data mt7629_data = {
 };
 
 static const struct mtk_soc_data rt5350_data = {
+	.reg_map = mtk_reg_map,
 	.caps = MT7628_CAPS,
 	.hw_features = MTK_HW_FEATURES_MT7628,
 	.required_clks = MT7628_CLKS_BITMAP,
