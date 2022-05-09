@@ -146,6 +146,29 @@ The ``struct page_pool_recycle_stats`` has the following fields:
   * ``ring_full``: page released from page pool because the ptr ring was full
   * ``released_refcnt``: page released (and not recycled) because refcnt > 1
 
+The following APIs can be used to report page_pool stats through ethtool and
+avoid code duplication in each driver:
+
+* page_pool_ethtool_stats_get_strings(): reports page_pool ethtool stats
+  strings according to the struct page_pool_stats
+     * rx_pp_alloc_fast
+     * rx_pp_alloc_slow
+     * rx_pp_alloc_slow_ho
+     * rx_pp_alloc_empty
+     * rx_pp_alloc_refill
+     * rx_pp_alloc_waive
+     * rx_pp_recycle_cached
+     * rx_pp_recycle_cache_full
+     * rx_pp_recycle_ring
+     * rx_pp_recycle_ring_full
+     * rx_pp_recycle_released_ref
+
+* page_pool_ethtool_stats_get_count(): reports the number of stats defined in
+  the ethtool page_pool APIs
+
+* page_pool_ethtool_stats_get(u64 \*data, void \*stats): reports the page_pool statistics accounted in
+  the stats pointer in the ethtool data pointer provided by the caller
+
 Coding examples
 ===============
 
