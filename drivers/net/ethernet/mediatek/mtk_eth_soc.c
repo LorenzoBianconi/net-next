@@ -34,6 +34,10 @@ MODULE_PARM_DESC(msg_level, "Message level (-1=defaults,0=none,...,16=all)");
 #define MTK_ETHTOOL_STAT(x) { #x, \
 			      offsetof(struct mtk_hw_stats, x) / sizeof(u64) }
 
+#define MTK_ETHTOOL_XDP_STAT(x) { #x, \
+				  offsetof(struct mtk_hw_stats, xdp_stats.x) / \
+				  sizeof(u64) }
+
 static const struct mtk_reg_map mtk_reg_map = {
 	.tx_irq_mask		= 0x1a1c,
 	.tx_irq_status		= 0x1a18,
@@ -141,6 +145,13 @@ static const struct mtk_ethtool_stats {
 	MTK_ETHTOOL_STAT(rx_long_errors),
 	MTK_ETHTOOL_STAT(rx_checksum_errors),
 	MTK_ETHTOOL_STAT(rx_flow_control_packets),
+	MTK_ETHTOOL_XDP_STAT(rx_xdp_redirect),
+	MTK_ETHTOOL_XDP_STAT(rx_xdp_pass),
+	MTK_ETHTOOL_XDP_STAT(rx_xdp_drop),
+	MTK_ETHTOOL_XDP_STAT(rx_xdp_tx),
+	MTK_ETHTOOL_XDP_STAT(rx_xdp_tx_errors),
+	MTK_ETHTOOL_XDP_STAT(tx_xdp_xmit),
+	MTK_ETHTOOL_XDP_STAT(tx_xdp_xmit_errors),
 };
 
 static const char * const mtk_clks_source_name[] = {
@@ -1495,7 +1506,8 @@ static void mtk_rx_put_buff(struct mtk_rx_ring *ring, void *data, bool napi)
 }
 
 static u32 mtk_xdp_run(struct mtk_rx_ring *ring, struct bpf_prog *prog,
-		       struct xdp_buff *xdp, struct net_device *dev)
+		       struct xdp_buff *xdp, struct net_device *dev,
+		       struct mtk_xdp_stats *stats)
 {
 	u32 act = XDP_PASS;
 
@@ -1505,10 +1517,13 @@ static u32 mtk_xdp_run(struct mtk_rx_ring *ring, struct bpf_prog *prog,
 	act = bpf_prog_run_xdp(prog, xdp);
 	switch (act) {
 	case XDP_PASS:
+		stats->rx_xdp_pass++;
 		return XDP_PASS;
 	case XDP_REDIRECT:
 		if (unlikely(xdp_do_redirect(dev, xdp, prog)))
 			break;
+
+		stats->rx_xdp_redirect++;
 		return XDP_REDIRECT;
 	default:
 		bpf_warn_invalid_xdp_action(dev, prog, act);
@@ -1520,14 +1535,38 @@ static u32 mtk_xdp_run(struct mtk_rx_ring *ring, struct bpf_prog *prog,
 		break;
 	}
 
+	stats->rx_xdp_drop++;
 	page_pool_put_full_page(ring->page_pool,
 				virt_to_head_page(xdp->data), true);
 	return XDP_DROP;
 }
 
+static void mtk_xdp_rx_complete(struct mtk_eth *eth,
+				struct mtk_xdp_stats *stats)
+{
+	int i, xdp_do_redirect = 0;
+
+	/* update xdp ethtool stats */
+	for (i = 0; i < MTK_MAX_DEVS; i++) {
+		struct mtk_hw_stats *hw_stats = eth->mac[i]->hw_stats;
+		struct mtk_xdp_stats *xdp_stats = &hw_stats->xdp_stats;
+
+		u64_stats_update_begin(&hw_stats->syncp);
+		xdp_stats->rx_xdp_redirect += stats[i].rx_xdp_redirect;
+		xdp_do_redirect += stats[i].rx_xdp_pass;
+		xdp_stats->rx_xdp_pass += stats[i].rx_xdp_pass;
+		xdp_stats->rx_xdp_drop += stats[i].rx_xdp_drop;
+		u64_stats_update_end(&hw_stats->syncp);
+	}
+
+	if (xdp_do_redirect)
+		xdp_do_flush_map();
+}
+
 static int mtk_poll_rx(struct napi_struct *napi, int budget,
 		       struct mtk_eth *eth)
 {
+	struct mtk_xdp_stats xdp_stats[MTK_MAX_DEVS] = {};
 	struct bpf_prog *prog = READ_ONCE(eth->prog);
 	struct dim_sample dim_sample = {};
 	struct mtk_rx_ring *ring;
@@ -1535,7 +1574,6 @@ static int mtk_poll_rx(struct napi_struct *napi, int budget,
 	struct sk_buff *skb;
 	u8 *data, *new_data;
 	struct mtk_rx_dma_v2 *rxd, trxd;
-	bool xdp_do_redirect = false;
 	int done = 0, bytes = 0;
 
 	while (done < budget) {
@@ -1597,12 +1635,10 @@ static int mtk_poll_rx(struct napi_struct *napi, int budget,
 					 false);
 			xdp_buff_clear_frags_flag(&xdp);
 
-			ret = mtk_xdp_run(ring, prog, &xdp, netdev);
-			if (ret != XDP_PASS) {
-				if (ret == XDP_REDIRECT)
-					xdp_do_redirect = true;
+			ret = mtk_xdp_run(ring, prog, &xdp, netdev,
+					  &xdp_stats[mac]);
+			if (ret != XDP_PASS)
 				goto skip_rx;
-			}
 
 			skb = build_skb(data, PAGE_SIZE);
 			if (unlikely(!skb)) {
@@ -1725,8 +1761,8 @@ rx_done:
 			  &dim_sample);
 	net_dim(&eth->rx_dim, dim_sample);
 
-	if (prog && xdp_do_redirect)
-		xdp_do_flush_map();
+	if (prog)
+		mtk_xdp_rx_complete(eth, xdp_stats);
 
 	return done;
 }
