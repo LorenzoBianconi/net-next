@@ -1906,12 +1906,14 @@ static int mtk_poll_rx(struct napi_struct *napi, int budget,
 		bytes += skb->len;
 
 		if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_V2)) {
+			reason = FIELD_GET(MTK_RXD5_PPE_CPU_REASON, trxd.rxd5);
 			hash = trxd.rxd5 & MTK_RXD5_FOE_ENTRY;
 			if (hash != MTK_RXD5_FOE_ENTRY)
 				skb_set_hash(skb, jhash_1word(hash, 0),
 					     PKT_HASH_TYPE_L4);
 			rxdcsum = &trxd.rxd3;
 		} else {
+			reason = FIELD_GET(MTK_RXD4_PPE_CPU_REASON, trxd.rxd4);
 			hash = trxd.rxd4 & MTK_RXD4_FOE_ENTRY;
 			if (hash != MTK_RXD4_FOE_ENTRY)
 				skb_set_hash(skb, jhash_1word(hash, 0),
@@ -1925,7 +1927,6 @@ static int mtk_poll_rx(struct napi_struct *napi, int budget,
 			skb_checksum_none_assert(skb);
 		skb->protocol = eth_type_trans(skb, netdev);
 
-		reason = FIELD_GET(MTK_RXD4_PPE_CPU_REASON, trxd.rxd4);
 		if (reason == MTK_PPE_CPU_REASON_HIT_UNBIND_RATE_REACHED)
 			mtk_ppe_check_skb(eth->ppe[0], skb, hash);
 
@@ -4241,7 +4242,7 @@ static const struct mtk_soc_data mt7621_data = {
 		.dma_len_offset = 16,
 	},
 	.foe = {
-		.entry_size = sizeof(struct mtk_foe_entry),
+		.entry_size = sizeof(struct mtk_foe_entry) - 16,
 		.hash_offset = 2,
 		.ib1 = {
 			.bind_ppoe = BIT(19),
@@ -4279,7 +4280,7 @@ static const struct mtk_soc_data mt7622_data = {
 		.dma_len_offset = 16,
 	},
 	.foe = {
-		.entry_size = sizeof(struct mtk_foe_entry),
+		.entry_size = sizeof(struct mtk_foe_entry) - 16,
 		.hash_offset = 2,
 		.ib1 = {
 			.bind_ppoe = BIT(19),
@@ -4323,7 +4324,7 @@ static const struct mtk_soc_data mt7623_data = {
 		.dma_len_offset = 16,
 	},
 	.foe = {
-		.entry_size = sizeof(struct mtk_foe_entry),
+		.entry_size = sizeof(struct mtk_foe_entry) - 16,
 		.hash_offset = 2,
 		.ib1 = {
 			.bind_ppoe = BIT(19),
@@ -4365,6 +4366,7 @@ static const struct mtk_soc_data mt7986_data = {
 	.reg_map = &mt7986_reg_map,
 	.ana_rgc3 = 0x128,
 	.caps = MT7986_CAPS,
+	.hw_features = MTK_HW_FEATURES,
 	.required_clks = MT7986_CLKS_BITMAP,
 	.required_pctl = false,
 	.txrx = {
@@ -4376,7 +4378,24 @@ static const struct mtk_soc_data mt7986_data = {
 		.dma_len_offset = 8,
 	},
 	.foe = {
+		.entry_size = sizeof(struct mtk_foe_entry),
 		.hash_offset = 4,
+		.ib1 = {
+			.bind_ppoe = BIT(17),
+			.bind_vlan_tag = BIT(18),
+			.bind_cache = BIT(20),
+			.bind_ttl = BIT(22),
+			.bind_ts = GENMASK(7, 0),
+			.bind_vlan_layer = GENMASK(16, 14),
+			.pkt_type = GENMASK(27, 23),
+		},
+		.ib2 = {
+			.multicast = BIT(13),
+			.wdma_winfo = BIT(19),
+			.port_ag = GENMASK(23, 20),
+			.port_mg = BIT(7),
+			.dst_port = GENMASK(12, 9),
+		},
 	},
 	.wed = {
 		.desc_ctrl_len1 = GENMASK(13, 0),

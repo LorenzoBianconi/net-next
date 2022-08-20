@@ -172,9 +172,12 @@ int mtk_foe_entry_prepare(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 	      eth->soc->foe.ib1.bind_cache;
 	entry->ib1 = val;
 
-	val = MTK_FIELD_PREP(eth->soc->foe.ib2.port_mg, 0x3f) |
-	      MTK_FIELD_PREP(eth->soc->foe.ib2.port_ag, 0x1f) |
-	      MTK_FIELD_PREP(eth->soc->foe.ib2.dst_port, pse_port);
+	val = MTK_FIELD_PREP(eth->soc->foe.ib2.dst_port, pse_port);
+	if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_V2))
+		val |= MTK_FIELD_PREP(eth->soc->foe.ib2.port_ag, 0xf);
+	else
+		val |= MTK_FIELD_PREP(eth->soc->foe.ib2.port_mg, 0x3f) |
+		       MTK_FIELD_PREP(eth->soc->foe.ib2.port_ag, 0x1f);
 
 	if (is_multicast_ether_addr(dest_mac))
 		val |= eth->soc->foe.ib2.multicast;
@@ -370,12 +373,17 @@ int mtk_foe_entry_set_wdma(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 
 	*ib2 &= ~eth->soc->foe.ib2.port_mg;
 	*ib2 |= eth->soc->foe.ib2.wdma_winfo;
-	if (wdma_idx)
-		*ib2 |= MTK_FOE_IB2_WDMA_DEVIDX;
-
-	l2->vlan2 = FIELD_PREP(MTK_FOE_VLAN2_WINFO_BSS, bss) |
-		    FIELD_PREP(MTK_FOE_VLAN2_WINFO_WCID, wcid) |
-		    FIELD_PREP(MTK_FOE_VLAN2_WINFO_RING, txq);
+	if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_V2)) {
+		*ib2 |=  FIELD_PREP(MTK_FOE_IB2_RX_IDX, txq);
+		l2->winfo = FIELD_PREP(MTK_FOE_WINFO_WCID, wcid) |
+			    FIELD_PREP(MTK_FOE_WINFO_BSS, bss);
+	} else {
+		if (wdma_idx)
+			*ib2 |= MTK_FOE_IB2_WDMA_DEVIDX;
+		l2->vlan2 = FIELD_PREP(MTK_FOE_VLAN2_WINFO_BSS, bss) |
+			    FIELD_PREP(MTK_FOE_VLAN2_WINFO_WCID, wcid) |
+			    FIELD_PREP(MTK_FOE_VLAN2_WINFO_RING, txq);
+	}
 
 	return 0;
 }
@@ -784,6 +792,8 @@ void mtk_ppe_start(struct mtk_ppe *ppe)
 			 MTK_PPE_SCAN_MODE_KEEPALIVE_AGE) |
 	      FIELD_PREP(MTK_PPE_TB_CFG_ENTRY_NUM,
 			 MTK_PPE_ENTRIES_SHIFT);
+	if (MTK_HAS_CAPS(ppe->eth->soc->caps, MTK_NETSYS_V2))
+		val |= MTK_PPE_TB_CFG_INFO_SEL;
 	ppe_w32(ppe, MTK_PPE_TB_CFG, val);
 
 	ppe_w32(ppe, MTK_PPE_IP_PROTO_CHK,
@@ -791,15 +801,21 @@ void mtk_ppe_start(struct mtk_ppe *ppe)
 
 	mtk_ppe_cache_enable(ppe, true);
 
-	val = MTK_PPE_FLOW_CFG_IP4_TCP_FRAG |
-	      MTK_PPE_FLOW_CFG_IP4_UDP_FRAG |
-	      MTK_PPE_FLOW_CFG_IP6_3T_ROUTE |
+	val = MTK_PPE_FLOW_CFG_IP6_3T_ROUTE |
 	      MTK_PPE_FLOW_CFG_IP6_5T_ROUTE |
 	      MTK_PPE_FLOW_CFG_IP6_6RD |
 	      MTK_PPE_FLOW_CFG_IP4_NAT |
 	      MTK_PPE_FLOW_CFG_IP4_NAPT |
 	      MTK_PPE_FLOW_CFG_IP4_DSLITE |
 	      MTK_PPE_FLOW_CFG_IP4_NAT_FRAG;
+	if (MTK_HAS_CAPS(ppe->eth->soc->caps, MTK_NETSYS_V2))
+		val |= MTK_PPE_MD_TOAP_BYP_CRSN0 |
+		       MTK_PPE_MD_TOAP_BYP_CRSN1 |
+		       MTK_PPE_MD_TOAP_BYP_CRSN2 |
+		       MTK_PPE_FLOW_CFG_IP4_HASH_GRE_KEY;
+	else
+		val |= MTK_PPE_FLOW_CFG_IP4_TCP_FRAG |
+		       MTK_PPE_FLOW_CFG_IP4_UDP_FRAG;
 	ppe_w32(ppe, MTK_PPE_FLOW_CFG, val);
 
 	val = FIELD_PREP(MTK_PPE_UNBIND_AGE_MIN_PACKETS, 1000) |
@@ -833,6 +849,11 @@ void mtk_ppe_start(struct mtk_ppe *ppe)
 	ppe_w32(ppe, MTK_PPE_GLO_CFG, val);
 
 	ppe_w32(ppe, MTK_PPE_DEFAULT_CPU_PORT, 0);
+
+	if (MTK_HAS_CAPS(ppe->eth->soc->caps, MTK_NETSYS_V2)) {
+		ppe_w32(ppe, MTK_PPE_DEFAULT_CPU_PORT1, 0xcb777);
+		ppe_w32(ppe, MTK_PPE_SBW_CTRL, 0x7f);
+	}
 }
 
 int mtk_ppe_stop(struct mtk_ppe *ppe)

@@ -53,6 +53,7 @@ enum {
 
 #define MTK_FOE_IB2_PORT_MG		GENMASK(17, 12)
 
+#define MTK_FOE_IB2_RX_IDX		GENMASK(18, 17)
 #define MTK_FOE_IB2_PORT_AG		GENMASK(23, 18)
 
 #define MTK_FOE_IB2_DSCP		GENMASK(31, 24)
@@ -61,8 +62,12 @@ enum {
 #define MTK_FOE_VLAN2_WINFO_WCID	GENMASK(13, 6)
 #define MTK_FOE_VLAN2_WINFO_RING	GENMASK(15, 14)
 
+#define MTK_FOE_WINFO_BSS		GENMASK(5, 0)
+#define MTK_FOE_WINFO_WCID		GENMASK(15, 6)
+
 #define MTK_FIELD_PREP(mask, val)	(((typeof(mask))(val) << __bf_shf(mask)) & (mask))
 #define MTK_FIELD_GET(mask, val)	((typeof(mask))(((val) & (mask)) >> __bf_shf(mask)))
+
 enum {
 	MTK_FOE_STATE_INVALID,
 	MTK_FOE_STATE_UNBIND,
@@ -83,6 +88,9 @@ struct mtk_foe_mac_info {
 
 	u16 pppoe_id;
 	u16 src_mac_lo;
+
+	u16 minfo;
+	u16 winfo;
 };
 
 /* software-only entry type */
@@ -200,7 +208,7 @@ struct mtk_foe_entry {
 		struct mtk_foe_ipv4_dslite dslite;
 		struct mtk_foe_ipv6 ipv6;
 		struct mtk_foe_ipv6_6rd ipv6_6rd;
-		u32 data[19];
+		u32 data[23];
 	};
 };
 
