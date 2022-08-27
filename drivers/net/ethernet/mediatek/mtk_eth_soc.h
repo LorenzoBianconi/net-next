@@ -1011,6 +1011,13 @@ struct mtk_soc_data {
 			u16 dst_port;
 		} ib2;
 	} foe;
+	struct {
+		u32 desc_ctrl_len1;
+		u32 desc_ctrl_last_seg1;
+		u32 tx_bm_tkid_addr;
+		u32 tx_bm_dyn_thr_lo;
+		u32 tx_bm_dyn_thr_hi;
+	} wed;
 };
 
 /* currently no SoC has more than 2 macs */
