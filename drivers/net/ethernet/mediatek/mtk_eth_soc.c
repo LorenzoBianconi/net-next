@@ -4216,8 +4216,6 @@ static const struct mtk_soc_data mt7621_data = {
 	.required_clks = MT7621_CLKS_BITMAP,
 	.required_pctl = false,
 	.offload_version = 2,
-	.hash_offset = 2,
-	.foe_entry_size = sizeof(struct mtk_foe_entry),
 	.txrx = {
 		.txd_size = sizeof(struct mtk_tx_dma),
 		.rxd_size = sizeof(struct mtk_rx_dma),
@@ -4225,6 +4223,26 @@ static const struct mtk_soc_data mt7621_data = {
 		.rx_dma_l4_valid = RX_DMA_L4_VALID,
 		.dma_max_len = MTK_TX_DMA_BUF_LEN,
 		.dma_len_offset = 16,
+	},
+	.foe = {
+		.entry_size = sizeof(struct mtk_foe_entry),
+		.hash_offset = 2,
+		.ib1 = {
+			.bind_ppoe = BIT(19),
+			.bind_vlan_tag = BIT(20),
+			.bind_cache = BIT(22),
+			.bind_ttl = BIT(24),
+			.bind_ts = GENMASK(14, 0),
+			.bind_vlan_layer = GENMASK(18, 16),
+			.pkt_type = GENMASK(27, 25),
+		},
+		.ib2 = {
+			.multicast = BIT(8),
+			.wdma_winfo = BIT(17),
+			.port_ag = GENMASK(23, 18),
+			.port_mg = GENMASK(17, 12),
+			.dst_port = GENMASK(7, 5),
+		},
 	},
 };
 
@@ -4236,8 +4254,6 @@ static const struct mtk_soc_data mt7622_data = {
 	.required_clks = MT7622_CLKS_BITMAP,
 	.required_pctl = false,
 	.offload_version = 2,
-	.hash_offset = 2,
-	.foe_entry_size = sizeof(struct mtk_foe_entry),
 	.txrx = {
 		.txd_size = sizeof(struct mtk_tx_dma),
 		.rxd_size = sizeof(struct mtk_rx_dma),
@@ -4245,6 +4261,26 @@ static const struct mtk_soc_data mt7622_data = {
 		.rx_dma_l4_valid = RX_DMA_L4_VALID,
 		.dma_max_len = MTK_TX_DMA_BUF_LEN,
 		.dma_len_offset = 16,
+	},
+	.foe = {
+		.entry_size = sizeof(struct mtk_foe_entry),
+		.hash_offset = 2,
+		.ib1 = {
+			.bind_ppoe = BIT(19),
+			.bind_vlan_tag = BIT(20),
+			.bind_cache = BIT(22),
+			.bind_ttl = BIT(24),
+			.bind_ts = GENMASK(14, 0),
+			.bind_vlan_layer = GENMASK(18, 16),
+			.pkt_type = GENMASK(27, 25),
+		},
+		.ib2 = {
+			.multicast = BIT(8),
+			.wdma_winfo = BIT(17),
+			.port_ag = GENMASK(23, 18),
+			.port_mg = GENMASK(17, 12),
+			.dst_port = GENMASK(7, 5),
+		},
 	},
 };
 
@@ -4255,8 +4291,6 @@ static const struct mtk_soc_data mt7623_data = {
 	.required_clks = MT7623_CLKS_BITMAP,
 	.required_pctl = true,
 	.offload_version = 2,
-	.hash_offset = 2,
-	.foe_entry_size = sizeof(struct mtk_foe_entry),
 	.txrx = {
 		.txd_size = sizeof(struct mtk_tx_dma),
 		.rxd_size = sizeof(struct mtk_rx_dma),
@@ -4264,6 +4298,26 @@ static const struct mtk_soc_data mt7623_data = {
 		.rx_dma_l4_valid = RX_DMA_L4_VALID,
 		.dma_max_len = MTK_TX_DMA_BUF_LEN,
 		.dma_len_offset = 16,
+	},
+	.foe = {
+		.entry_size = sizeof(struct mtk_foe_entry),
+		.hash_offset = 2,
+		.ib1 = {
+			.bind_ppoe = BIT(19),
+			.bind_vlan_tag = BIT(20),
+			.bind_cache = BIT(22),
+			.bind_ttl = BIT(24),
+			.bind_ts = GENMASK(14, 0),
+			.bind_vlan_layer = GENMASK(18, 16),
+			.pkt_type = GENMASK(27, 25),
+		},
+		.ib2 = {
+			.multicast = BIT(8),
+			.wdma_winfo = BIT(17),
+			.port_ag = GENMASK(23, 18),
+			.port_mg = GENMASK(17, 12),
+			.dst_port = GENMASK(7, 5),
+		},
 	},
 };
 
@@ -4290,7 +4344,6 @@ static const struct mtk_soc_data mt7986_data = {
 	.caps = MT7986_CAPS,
 	.required_clks = MT7986_CLKS_BITMAP,
 	.required_pctl = false,
-	.hash_offset = 4,
 	.txrx = {
 		.txd_size = sizeof(struct mtk_tx_dma_v2),
 		.rxd_size = sizeof(struct mtk_rx_dma_v2),
@@ -4298,6 +4351,9 @@ static const struct mtk_soc_data mt7986_data = {
 		.rx_dma_l4_valid = RX_DMA_L4_VALID_V2,
 		.dma_max_len = MTK_TX_DMA_BUF_LEN_V2,
 		.dma_len_offset = 8,
+	},
+	.foe = {
+		.hash_offset = 4,
 	},
 };
 

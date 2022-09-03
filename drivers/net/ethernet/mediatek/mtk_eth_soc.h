@@ -967,14 +967,13 @@ struct mtk_reg_map {
  *				the target SoC
  * @required_pctl		A bool value to show whether the SoC requires
  *				the extra setup for those pins used by GMAC.
- * @hash_offset			Flow table hash offset.
- * @foe_entry_size		Foe table entry size.
  * @txd_size			Tx DMA descriptor size.
  * @rxd_size			Rx DMA descriptor size.
  * @rx_irq_done_mask		Rx irq done register mask.
  * @rx_dma_l4_valid		Rx DMA valid register mask.
  * @dma_max_len			Max DMA tx/rx buffer length.
  * @dma_len_offset		Tx/Rx DMA length field offset.
+ * @foe				Foe table chip info.
  */
 struct mtk_soc_data {
 	const struct mtk_reg_map *reg_map;
@@ -983,8 +982,6 @@ struct mtk_soc_data {
 	u32		required_clks;
 	bool		required_pctl;
 	u8		offload_version;
-	u8		hash_offset;
-	u16		foe_entry_size;
 	netdev_features_t hw_features;
 	struct {
 		u32	txd_size;
@@ -994,6 +991,26 @@ struct mtk_soc_data {
 		u32	dma_max_len;
 		u32	dma_len_offset;
 	} txrx;
+	struct {
+		u16	entry_size;
+		u8	hash_offset;
+		struct {
+			u32 bind_ppoe;
+			u32 bind_vlan_tag;
+			u32 bind_cache;
+			u32 bind_ttl;
+			u32 bind_ts;
+			u32 bind_vlan_layer;
+			u32 pkt_type;
+		} ib1;
+		struct {
+			u32 wdma_winfo;
+			u32 port_ag;
+			u32 port_mg;
+			u16 multicast;
+			u16 dst_port;
+		} ib2;
+	} foe;
 };
 
 /* currently no SoC has more than 2 macs */
@@ -1150,7 +1167,7 @@ mtk_foe_get_entry(struct mtk_ppe *ppe, u16 hash)
 {
 	const struct mtk_soc_data *soc = ppe->eth->soc;
 
-	return ppe->foe_table + hash * soc->foe_entry_size;
+	return ppe->foe_table + hash * soc->foe.entry_size;
 }
 
 /* read the hardware status register */

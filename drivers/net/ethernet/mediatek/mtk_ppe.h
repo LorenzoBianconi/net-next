@@ -61,6 +61,8 @@ enum {
 #define MTK_FOE_VLAN2_WINFO_WCID	GENMASK(13, 6)
 #define MTK_FOE_VLAN2_WINFO_RING	GENMASK(15, 14)
 
+#define MTK_FIELD_PREP(mask, val)	(((typeof(mask))(val) << __bf_shf(mask)) & (mask))
+#define MTK_FIELD_GET(mask, val)	((typeof(mask))(((val) & (mask)) >> __bf_shf(mask)))
 enum {
 	MTK_FOE_STATE_INVALID,
 	MTK_FOE_STATE_UNBIND,
@@ -306,20 +308,27 @@ mtk_ppe_check_skb(struct mtk_ppe *ppe, struct sk_buff *skb, u16 hash)
 	__mtk_ppe_check_skb(ppe, skb, hash);
 }
 
-int mtk_foe_entry_prepare(struct mtk_foe_entry *entry, int type, int l4proto,
-			  u8 pse_port, u8 *src_mac, u8 *dest_mac);
-int mtk_foe_entry_set_pse_port(struct mtk_foe_entry *entry, u8 port);
-int mtk_foe_entry_set_ipv4_tuple(struct mtk_foe_entry *entry, bool orig,
+int mtk_foe_entry_prepare(struct mtk_eth *eth, struct mtk_foe_entry *entry,
+			  int type, int l4proto, u8 pse_port, u8 *src_mac,
+			  u8 *dest_mac);
+int mtk_foe_entry_set_pse_port(struct mtk_eth *eth,
+			       struct mtk_foe_entry *entry, u8 port);
+int mtk_foe_entry_set_ipv4_tuple(struct mtk_eth *eth,
+				 struct mtk_foe_entry *entry, bool orig,
 				 __be32 src_addr, __be16 src_port,
 				 __be32 dest_addr, __be16 dest_port);
-int mtk_foe_entry_set_ipv6_tuple(struct mtk_foe_entry *entry,
+int mtk_foe_entry_set_ipv6_tuple(struct mtk_eth *eth,
+				 struct mtk_foe_entry *entry,
 				 __be32 *src_addr, __be16 src_port,
 				 __be32 *dest_addr, __be16 dest_port);
-int mtk_foe_entry_set_dsa(struct mtk_foe_entry *entry, int port);
-int mtk_foe_entry_set_vlan(struct mtk_foe_entry *entry, int vid);
-int mtk_foe_entry_set_pppoe(struct mtk_foe_entry *entry, int sid);
-int mtk_foe_entry_set_wdma(struct mtk_foe_entry *entry, int wdma_idx, int txq,
-			   int bss, int wcid);
+int mtk_foe_entry_set_dsa(struct mtk_eth *eth, struct mtk_foe_entry *entry,
+			  int port);
+int mtk_foe_entry_set_vlan(struct mtk_eth *eth, struct mtk_foe_entry *entry,
+			   int vid);
+int mtk_foe_entry_set_pppoe(struct mtk_eth *eth, struct mtk_foe_entry *entry,
+			    int sid);
+int mtk_foe_entry_set_wdma(struct mtk_eth *eth, struct mtk_foe_entry *entry,
+			   int wdma_idx, int txq, int bss, int wcid);
 int mtk_foe_entry_commit(struct mtk_ppe *ppe, struct mtk_flow_entry *entry);
 void mtk_foe_entry_clear(struct mtk_ppe *ppe, struct mtk_flow_entry *entry);
 int mtk_foe_entry_idle_time(struct mtk_ppe *ppe, struct mtk_flow_entry *entry);
