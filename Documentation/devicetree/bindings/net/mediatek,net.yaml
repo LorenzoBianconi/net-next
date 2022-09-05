@@ -238,6 +238,20 @@ allOf:
           minItems: 2
           maxItems: 2
 
+        mediatek,wed:
+          $ref: /schemas/types.yaml#/definitions/phandle-array
+          minItems: 2
+          maxItems: 2
+          items:
+            maxItems: 1
+          description:
+            List of phandles to wireless ethernet dispatch nodes.
+
+        mediatek,wed-pcie:
+          $ref: /schemas/types.yaml#/definitions/phandle
+          description:
+            Phandle to the mediatek wed-pcie controller.
+
 patternProperties:
   "^mac@[0-1]$":
     type: object
