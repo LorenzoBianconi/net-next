@@ -85,11 +85,31 @@ static struct mtk_wed_hw *
 mtk_wed_assign(struct mtk_wed_device *dev)
 {
 	struct mtk_wed_hw *hw;
+	int i;
 
-	hw = hw_list[pci_domain_nr(dev->wlan.pci_dev->bus)];
-	if (!hw || hw->wed_dev)
-		return NULL;
+	if (dev->wlan.bus_type == MTK_WED_BUS_PCIE) {
+		hw = hw_list[pci_domain_nr(dev->wlan.pci_dev->bus)];
+		if (!hw)
+			return NULL;
 
+		if (!hw->wed_dev)
+			goto out;
+
+		if (hw->version == 1)
+			return NULL;
+
+		/* MT7986 WED devices do not have any pcie slot restrictions */
+	}
+	/* MT7986 PCIE or AXI */
+	for (i = 0; i < ARRAY_SIZE(hw_list); i++) {
+		hw = hw_list[i];
+		if (hw && !hw->wed_dev)
+			goto out;
+	}
+
+	return NULL;
+
+out:
 	hw->wed_dev = dev;
 	return hw;
 }
@@ -321,7 +341,6 @@ mtk_wed_stop(struct mtk_wed_device *dev)
 static void
 mtk_wed_detach(struct mtk_wed_device *dev)
 {
-	struct device_node *wlan_node = dev->wlan.pci_dev->dev.of_node;
 	struct mtk_wed_hw *hw = dev->hw;
 
 	mutex_lock(&hw_lock);
@@ -336,9 +355,14 @@ mtk_wed_detach(struct mtk_wed_device *dev)
 	mtk_wed_free_buffer(dev);
 	mtk_wed_free_tx_rings(dev);
 
-	if (of_dma_is_coherent(wlan_node) && hw->hifsys)
-		regmap_update_bits(hw->hifsys, HIFSYS_DMA_AG_MAP,
-				   BIT(hw->index), BIT(hw->index));
+	if (dev->wlan.bus_type == MTK_WED_BUS_PCIE) {
+		struct device_node *wlan_node;
+
+		wlan_node = dev->wlan.pci_dev->dev.of_node;
+		if (of_dma_is_coherent(wlan_node) && hw->hifsys)
+			regmap_update_bits(hw->hifsys, HIFSYS_DMA_AG_MAP,
+					   BIT(hw->index), BIT(hw->index));
+	}
 
 	if (!hw_list[!hw->index]->wed_dev &&
 	    hw->eth->dma_dev != hw->eth->dev)
@@ -355,40 +379,54 @@ mtk_wed_detach(struct mtk_wed_device *dev)
 static void
 mtk_wed_bus_init(struct mtk_wed_device *dev)
 {
-	struct device_node *np = dev->hw->eth->dev->of_node;
-	struct regmap *regs;
-	u32 val;
+	switch (dev->wlan.bus_type) {
+	case MTK_WED_BUS_PCIE: {
+		struct device_node *np = dev->hw->eth->dev->of_node;
+		struct regmap *regs;
+		u32 val;
 
-	regs = syscon_regmap_lookup_by_phandle(np, "mediatek,wed-pcie");
-	if (IS_ERR(regs))
-		return;
+		regs = syscon_regmap_lookup_by_phandle(np,
+						       "mediatek,wed-pcie");
+		if (IS_ERR(regs))
+			break;
 
-	regmap_update_bits(regs, 0, BIT(0), BIT(0));
+		regmap_update_bits(regs, 0, BIT(0), BIT(0));
 
-	wed_w32(dev, MTK_WED_PCIE_INT_CTRL,
-		FIELD_PREP(MTK_WED_PCIE_INT_CTRL_POLL_EN, 2));
+		wed_w32(dev, MTK_WED_PCIE_INT_CTRL,
+			FIELD_PREP(MTK_WED_PCIE_INT_CTRL_POLL_EN, 2));
 
-	/* pcie interrupt control: pola/source selection */
-	wed_set(dev, MTK_WED_PCIE_INT_CTRL,
-		MTK_WED_PCIE_INT_CTRL_MSK_EN_POLA |
-		FIELD_PREP(MTK_WED_PCIE_INT_CTRL_SRC_SEL, 1));
-	wed_r32(dev, MTK_WED_PCIE_INT_CTRL);
+		/* pcie interrupt control: pola/source selection */
+		wed_set(dev, MTK_WED_PCIE_INT_CTRL,
+			MTK_WED_PCIE_INT_CTRL_MSK_EN_POLA |
+			FIELD_PREP(MTK_WED_PCIE_INT_CTRL_SRC_SEL, 1));
+		wed_r32(dev, MTK_WED_PCIE_INT_CTRL);
 
-	val = wed_r32(dev, MTK_WED_PCIE_CFG_INTM);
-	val = wed_r32(dev, MTK_WED_PCIE_CFG_BASE);
-	wed_w32(dev, MTK_WED_PCIE_CFG_INTM, PCIE_BASE_ADDR0 | 0x180);
-	wed_w32(dev, MTK_WED_PCIE_CFG_BASE, PCIE_BASE_ADDR0 | 0x184);
+		val = wed_r32(dev, MTK_WED_PCIE_CFG_INTM);
+		val = wed_r32(dev, MTK_WED_PCIE_CFG_BASE);
+		wed_w32(dev, MTK_WED_PCIE_CFG_INTM, PCIE_BASE_ADDR0 | 0x180);
+		wed_w32(dev, MTK_WED_PCIE_CFG_BASE, PCIE_BASE_ADDR0 | 0x184);
 
-	val = wed_r32(dev, MTK_WED_PCIE_CFG_INTM);
-	val = wed_r32(dev, MTK_WED_PCIE_CFG_BASE);
+		val = wed_r32(dev, MTK_WED_PCIE_CFG_INTM);
+		val = wed_r32(dev, MTK_WED_PCIE_CFG_BASE);
 
-	/* pcie interrupt status trigger register */
-	wed_w32(dev, MTK_WED_PCIE_INT_TRIGGER, BIT(24));
-	wed_r32(dev, MTK_WED_PCIE_INT_TRIGGER);
+		/* pcie interrupt status trigger register */
+		wed_w32(dev, MTK_WED_PCIE_INT_TRIGGER, BIT(24));
+		wed_r32(dev, MTK_WED_PCIE_INT_TRIGGER);
 
-	/* pola setting */
-	val = wed_r32(dev, MTK_WED_PCIE_INT_CTRL);
-	wed_set(dev, MTK_WED_PCIE_INT_CTRL, MTK_WED_PCIE_INT_CTRL_MSK_EN_POLA);
+		/* pola setting */
+		val = wed_r32(dev, MTK_WED_PCIE_INT_CTRL);
+		wed_set(dev, MTK_WED_PCIE_INT_CTRL,
+			MTK_WED_PCIE_INT_CTRL_MSK_EN_POLA);
+		break;
+	}
+	case MTK_WED_BUS_AXI:
+		wed_set(dev, MTK_WED_WPDMA_INT_CTRL,
+			MTK_WED_WPDMA_INT_CTRL_SIG_SRC |
+			FIELD_PREP(MTK_WED_WPDMA_INT_CTRL_SRC_SEL, 0));
+		break;
+	default:
+		break;
+	}
 }
 
 static void
@@ -798,7 +836,8 @@ mtk_wed_attach(struct mtk_wed_device *dev)
 	RCU_LOCKDEP_WARN(!rcu_read_lock_held(),
 			 "mtk_wed_attach without holding the RCU read lock");
 
-	if (pci_domain_nr(dev->wlan.pci_dev->bus) > 1 ||
+	if ((dev->wlan.bus_type == MTK_WED_BUS_PCIE &&
+	     pci_domain_nr(dev->wlan.pci_dev->bus) > 1) ||
 	    !try_module_get(THIS_MODULE))
 		ret = -ENODEV;
 
