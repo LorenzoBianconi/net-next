@@ -70,6 +70,27 @@
 			reg = <0 0x43000000 0 0x30000>;
 			no-map;
 		};
+
+		wocpu0_emi: wocpu0_emi@4fd00000 {
+			compatible = "mediatek,wocpu0_emi";
+			no-map;
+			reg = <0 0x4fd00000 0 0x40000>;
+			shared = <0>;
+		};
+
+		wocpu1_emi: wocpu1_emi@4fd40000 {
+			compatible = "mediatek,wocpu1_emi";
+			no-map;
+			reg = <0 0x4fd40000 0 0x40000>;
+			shared = <0>;
+		};
+
+		wocpu_data: wocpu_data@4fd80000 {
+			compatible = "mediatek,wocpu_data";
+			no-map;
+			reg = <0 0x4fd80000 0 0x240000>;
+			shared = <1>;
+		};
 	};
 
 	timer {
@@ -226,6 +247,51 @@
 			compatible = "mediatek,mt7986-wed-pcie",
 				     "syscon";
 			reg = <0 0x10003000 0 0x10>;
+		};
+
+		ap2woccif0: ap2woccif@151a5000 {
+			compatible = "mediatek,ap2woccif",
+				     "syscon";
+			reg = <0 0x151a5000 0 0x1000>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 211 IRQ_TYPE_LEVEL_HIGH>;
+		};
+
+		ap2woccif1: ap2woccif@0x151ad000 {
+			compatible = "mediatek,ap2woccif",
+				     "syscon";
+			reg = <0 0x151ad000 0 0x1000>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 212 IRQ_TYPE_LEVEL_HIGH>;
+		};
+
+		wocpu0_ilm: wocpu0_ilm@151e0000 {
+			compatible = "mediatek,wocpu0_ilm";
+			reg = <0 0x151e0000 0 0x8000>;
+		};
+
+		wocpu1_ilm: wocpu1_ilm@151f0000 {
+			compatible = "mediatek,wocpu1_ilm";
+			reg = <0 0x151f0000 0 0x8000>;
+		};
+
+		wocpu0_dlm: wocpu_dlm@151e8000 {
+			compatible = "mediatek,wocpu_dlm";
+			reg = <0 0x151e8000 0 0x2000>;
+			resets = <&ethsysrst 0>;
+			reset-names = "wocpu_rst";
+		};
+
+		wocpu1_dlm: wocpu_dlm@0x151f8000 {
+			compatible = "mediatek,wocpu_dlm";
+			reg = <0 0x151f8000 0 0x2000>;
+			resets = <&ethsysrst 0>;
+			reset-names = "wocpu_rst";
+		};
+
+		cpu_boot: wocpu_boot@15194000 {
+			compatible = "mediatek,wocpu_boot";
+			reg = <0 0x15194000 0 0x1000>;
 		};
 
 		wed0: wed@15010000 {
