@@ -8,6 +8,7 @@
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/clock/mt7986-clk.h>
 #include <dt-bindings/reset/mt7986-resets.h>
+#include <dt-bindings/reset/ti-syscon.h>
 
 / {
 	interrupt-parent = <&gic>;
@@ -75,6 +76,20 @@
 		wmcpu_emi: wmcpu-reserved@4fc00000 {
 			no-map;
 			reg = <0 0x4fc00000 0 0x00100000>;
+
+		wocpu0_emi: wocpu0_emi@4fd00000 {
+			reg = <0 0x4fd00000 0 0x40000>;
+			no-map;
+		};
+
+		wocpu1_emi: wocpu1_emi@4fd40000 {
+			reg = <0 0x4fd40000 0 0x40000>;
+			no-map;
+		};
+
+		wocpu_data: wocpu_data@4fd80000 {
+			reg = <0 0x4fd80000 0 0x240000>;
+			no-map;
 		};
 	};
 
@@ -226,6 +241,12 @@
 			 reg = <0 0x15000000 0 0x1000>;
 			 #clock-cells = <1>;
 			 #reset-cells = <1>;
+
+			ethsysrst: reset-controller {
+				compatible = "ti,syscon-reset";
+				#reset-cells = <1>;
+				ti,reset-bits = <0x34 4 0x34 4 0x34 4 (ASSERT_SET | DEASSERT_CLEAR | STATUS_SET)>;
+			};
 		};
 
 		wed_pcie: wed-pcie@10003000 {
@@ -240,6 +261,12 @@
 			reg = <0 0x15010000 0 0x1000>;
 			interrupt-parent = <&gic>;
 			interrupts = <GIC_SPI 205 IRQ_TYPE_LEVEL_HIGH>;
+			mediatek,wocpu_data = <&wocpu_data>;
+			mediatek,ap2woccif = <&ap2woccif0>;
+			mediatek,wocpu_ilm = <&wocpu0_ilm>;
+			mediatek,wocpu_dlm = <&wocpu0_dlm>;
+			mediatek,wocpu_emi = <&wocpu0_emi>;
+			mediatek,wocpu_boot = <&cpu_boot>;
 		};
 
 		wed1: wed@15011000 {
@@ -248,6 +275,58 @@
 			reg = <0 0x15011000 0 0x1000>;
 			interrupt-parent = <&gic>;
 			interrupts = <GIC_SPI 206 IRQ_TYPE_LEVEL_HIGH>;
+			mediatek,wocpu_data = <&wocpu_data>;
+			mediatek,ap2woccif = <&ap2woccif1>;
+			mediatek,wocpu_ilm = <&wocpu1_ilm>;
+			mediatek,wocpu_dlm = <&wocpu1_dlm>;
+			mediatek,wocpu_emi = <&wocpu1_emi>;
+			mediatek,wocpu_boot = <&cpu_boot>;
+		};
+
+		ap2woccif0: ap2woccif@151a5000 {
+			compatible = "mediatek,ap2woccif",
+				     "syscon";
+			reg = <0 0x151a5000 0 0x1000>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 211 IRQ_TYPE_LEVEL_HIGH>;
+		};
+
+		ap2woccif1: ap2woccif@0x151ad000 {
+			compatible = "mediatek,ap2woccif",
+				     "syscon";
+			reg = <0 0x151ad000 0 0x1000>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 212 IRQ_TYPE_LEVEL_HIGH>;
+		};
+
+		wocpu0_ilm: wocpu0_ilm@151e0000 {
+			compatible = "mediatek,wocpu0_ilm";
+			reg = <0 0x151e0000 0 0x8000>;
+		};
+
+		wocpu1_ilm: wocpu1_ilm@151f0000 {
+			compatible = "mediatek,wocpu1_ilm";
+			reg = <0 0x151f0000 0 0x8000>;
+		};
+
+		wocpu0_dlm: wocpu_dlm@151e8000 {
+			compatible = "mediatek,wocpu_dlm";
+			reg = <0 0x151e8000 0 0x2000>;
+			resets = <&ethsysrst 0>;
+			reset-names = "wocpu_rst";
+		};
+
+		wocpu1_dlm: wocpu_dlm@0x151f8000 {
+			compatible = "mediatek,wocpu_dlm";
+			reg = <0 0x151f8000 0 0x2000>;
+			resets = <&ethsysrst 0>;
+			reset-names = "wocpu_rst";
+		};
+
+		cpu_boot: wocpu_boot@15194000 {
+			compatible = "mediatek,wocpu_boot",
+				     "syscon";
+			reg = <0 0x15194000 0 0x1000>;
 		};
 
 		eth: ethernet@15100000 {
