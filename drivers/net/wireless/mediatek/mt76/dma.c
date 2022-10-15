@@ -749,7 +749,7 @@ mt76_dma_rx_reset(struct mt76_dev *dev, enum mt76_rxq_id qid)
 
 static void
 mt76_add_fragment(struct mt76_dev *dev, struct mt76_queue *q, void *data,
-		  int len, bool more)
+		  int len, bool more, u32 info)
 {
 	struct sk_buff *skb = q->rx_head;
 	struct skb_shared_info *shinfo = skb_shinfo(skb);
@@ -769,7 +769,7 @@ mt76_add_fragment(struct mt76_dev *dev, struct mt76_queue *q, void *data,
 
 	q->rx_head = NULL;
 	if (nr_frags < ARRAY_SIZE(shinfo->frags))
-		dev->drv->rx_skb(dev, q - dev->q_rx, skb);
+		dev->drv->rx_skb(dev, q - dev->q_rx, skb, &info);
 	else
 		dev_kfree_skb(skb);
 }
@@ -821,7 +821,7 @@ mt76_dma_rx_process(struct mt76_dev *dev, struct mt76_queue *q, int budget)
 		}
 
 		if (q->rx_head) {
-			mt76_add_fragment(dev, q, data, len, more);
+			mt76_add_fragment(dev, q, data, len, more, info);
 			continue;
 		}
 
@@ -845,7 +845,7 @@ mt76_dma_rx_process(struct mt76_dev *dev, struct mt76_queue *q, int budget)
 			continue;
 		}
 
-		dev->drv->rx_skb(dev, q - dev->q_rx, skb);
+		dev->drv->rx_skb(dev, q - dev->q_rx, skb, &info);
 		continue;
 
 free_frag:
