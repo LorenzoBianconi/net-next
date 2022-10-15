@@ -14,57 +14,60 @@ static bool wed_enable;
 module_param(wed_enable, bool, 0644);
 
 static const u32 mt7915_reg[] = {
-	[INT_SOURCE_CSR]	= 0xd7010,
-	[INT_MASK_CSR]		= 0xd7014,
-	[INT1_SOURCE_CSR]	= 0xd7088,
-	[INT1_MASK_CSR]		= 0xd708c,
-	[INT_MCU_CMD_SOURCE]	= 0xd51f0,
-	[INT_MCU_CMD_EVENT]	= 0x3108,
-	[WFDMA0_ADDR]		= 0xd4000,
-	[WFDMA0_PCIE1_ADDR]	= 0xd8000,
-	[WFDMA_EXT_CSR_ADDR]	= 0xd7000,
-	[CBTOP1_PHY_END]	= 0x77ffffff,
-	[INFRA_MCU_ADDR_END]	= 0x7c3fffff,
-	[FW_EXCEPTION_ADDR]	= 0x219848,
-	[SWDEF_BASE_ADDR]	= 0x41f200,
-	[TXQ_WED_RING_BASE]	= 0xd7300,
-	[RXQ_WED_RING_BASE]	= 0xd7410,
+	[INT_SOURCE_CSR]		= 0xd7010,
+	[INT_MASK_CSR]			= 0xd7014,
+	[INT1_SOURCE_CSR]		= 0xd7088,
+	[INT1_MASK_CSR]			= 0xd708c,
+	[INT_MCU_CMD_SOURCE]		= 0xd51f0,
+	[INT_MCU_CMD_EVENT]		= 0x3108,
+	[WFDMA0_ADDR]			= 0xd4000,
+	[WFDMA0_PCIE1_ADDR]		= 0xd8000,
+	[WFDMA_EXT_CSR_ADDR]		= 0xd7000,
+	[CBTOP1_PHY_END]		= 0x77ffffff,
+	[INFRA_MCU_ADDR_END]		= 0x7c3fffff,
+	[FW_EXCEPTION_ADDR]		= 0x219848,
+	[SWDEF_BASE_ADDR]		= 0x41f200,
+	[TXQ_WED_RING_BASE]		= 0xd7300,
+	[RXQ_WED_RING_BASE]		= 0xd7410,
+	[RXQ_WED_DATA_RING_BASE]	= 0xd4500,
 };
 
 static const u32 mt7916_reg[] = {
-	[INT_SOURCE_CSR]	= 0xd4200,
-	[INT_MASK_CSR]		= 0xd4204,
-	[INT1_SOURCE_CSR]	= 0xd8200,
-	[INT1_MASK_CSR]		= 0xd8204,
-	[INT_MCU_CMD_SOURCE]	= 0xd41f0,
-	[INT_MCU_CMD_EVENT]	= 0x2108,
-	[WFDMA0_ADDR]		= 0xd4000,
-	[WFDMA0_PCIE1_ADDR]	= 0xd8000,
-	[WFDMA_EXT_CSR_ADDR]	= 0xd7000,
-	[CBTOP1_PHY_END]	= 0x7fffffff,
-	[INFRA_MCU_ADDR_END]	= 0x7c085fff,
-	[FW_EXCEPTION_ADDR]	= 0x022050bc,
-	[SWDEF_BASE_ADDR]	= 0x411400,
-	[TXQ_WED_RING_BASE]	= 0xd7300,
-	[RXQ_WED_RING_BASE]	= 0xd7410,
+	[INT_SOURCE_CSR]		= 0xd4200,
+	[INT_MASK_CSR]			= 0xd4204,
+	[INT1_SOURCE_CSR]		= 0xd8200,
+	[INT1_MASK_CSR]			= 0xd8204,
+	[INT_MCU_CMD_SOURCE]		= 0xd41f0,
+	[INT_MCU_CMD_EVENT]		= 0x2108,
+	[WFDMA0_ADDR]			= 0xd4000,
+	[WFDMA0_PCIE1_ADDR]		= 0xd8000,
+	[WFDMA_EXT_CSR_ADDR]		= 0xd7000,
+	[CBTOP1_PHY_END]		= 0x7fffffff,
+	[INFRA_MCU_ADDR_END]		= 0x7c085fff,
+	[FW_EXCEPTION_ADDR]		= 0x022050bc,
+	[SWDEF_BASE_ADDR]		= 0x411400,
+	[TXQ_WED_RING_BASE]		= 0xd7300,
+	[RXQ_WED_RING_BASE]		= 0xd7410,
+	[RXQ_WED_DATA_RING_BASE]	= 0xd4540,
 };
 
 static const u32 mt7986_reg[] = {
-	[INT_SOURCE_CSR]	= 0x24200,
-	[INT_MASK_CSR]		= 0x24204,
-	[INT1_SOURCE_CSR]	= 0x28200,
-	[INT1_MASK_CSR]		= 0x28204,
-	[INT_MCU_CMD_SOURCE]	= 0x241f0,
-	[INT_MCU_CMD_EVENT]	= 0x54000108,
-	[WFDMA0_ADDR]		= 0x24000,
-	[WFDMA0_PCIE1_ADDR]	= 0x28000,
-	[WFDMA_EXT_CSR_ADDR]	= 0x27000,
-	[CBTOP1_PHY_END]	= 0x7fffffff,
-	[INFRA_MCU_ADDR_END]	= 0x7c085fff,
-	[FW_EXCEPTION_ADDR]	= 0x02204ffc,
-	[SWDEF_BASE_ADDR]	= 0x411400,
-	[TXQ_WED_RING_BASE]	= 0x24420,
-	[RXQ_WED_RING_BASE]	= 0x24520,
+	[INT_SOURCE_CSR]		= 0x24200,
+	[INT_MASK_CSR]			= 0x24204,
+	[INT1_SOURCE_CSR]		= 0x28200,
+	[INT1_MASK_CSR]			= 0x28204,
+	[INT_MCU_CMD_SOURCE]		= 0x241f0,
+	[INT_MCU_CMD_EVENT]		= 0x54000108,
+	[WFDMA0_ADDR]			= 0x24000,
+	[WFDMA0_PCIE1_ADDR]		= 0x28000,
+	[WFDMA_EXT_CSR_ADDR]		= 0x27000,
+	[CBTOP1_PHY_END]		= 0x7fffffff,
+	[INFRA_MCU_ADDR_END]		= 0x7c085fff,
+	[FW_EXCEPTION_ADDR]		= 0x02204ffc,
+	[SWDEF_BASE_ADDR]		= 0x411400,
+	[TXQ_WED_RING_BASE]		= 0x24420,
+	[RXQ_WED_RING_BASE]		= 0x24520,
+	[RXQ_WED_DATA_RING_BASE]	= 0x24540,
 };
 
 static const u32 mt7915_offs[] = {
@@ -549,6 +552,10 @@ int mt7915_mmio_wed_init(struct mt7915_dev *dev, void *pdev_ptr,
 
 		wed->wlan.pci_dev = pci_dev;
 		wed->wlan.bus_type = MTK_WED_BUS_PCIE;
+		wed->wlan.base = devm_ioremap(dev->mt76.dev,
+					      pci_resource_start(pci_dev, 0),
+					      pci_resource_len(pci_dev, 0));
+		wed->wlan.phy_base = pci_resource_start(pci_dev, 0);
 		wed->wlan.wpdma_int = pci_resource_start(pci_dev, 0) +
 				      MT_INT_WED_SOURCE_CSR;
 		wed->wlan.wpdma_mask = pci_resource_start(pci_dev, 0) +
@@ -559,6 +566,10 @@ int mt7915_mmio_wed_init(struct mt7915_dev *dev, void *pdev_ptr,
 				     MT_TXQ_WED_RING_BASE;
 		wed->wlan.wpdma_txfree = pci_resource_start(pci_dev, 0) +
 					 MT_RXQ_WED_RING_BASE;
+		wed->wlan.wpdma_rx_glo = pci_resource_start(pci_dev, 0) +
+					 MT_WPDMA_GLO_CFG;
+		wed->wlan.wpdma_rx = pci_resource_start(pci_dev, 0) +
+				     MT_RXQ_WED_DATA_RING_BASE;
 	} else {
 		struct platform_device *plat_dev = pdev_ptr;
 		struct resource *res;
@@ -569,19 +580,43 @@ int mt7915_mmio_wed_init(struct mt7915_dev *dev, void *pdev_ptr,
 
 		wed->wlan.platform_dev = plat_dev;
 		wed->wlan.bus_type = MTK_WED_BUS_AXI;
+		wed->wlan.base = devm_ioremap(dev->mt76.dev, res->start,
+					      resource_size(res));
+		wed->wlan.phy_base = res->start;
 		wed->wlan.wpdma_int = res->start + MT_INT_SOURCE_CSR;
 		wed->wlan.wpdma_mask = res->start + MT_INT_MASK_CSR;
 		wed->wlan.wpdma_tx = res->start + MT_TXQ_WED_RING_BASE;
 		wed->wlan.wpdma_txfree = res->start + MT_RXQ_WED_RING_BASE;
+		wed->wlan.wpdma_rx_glo = res->start + MT_WPDMA_GLO_CFG;
+		wed->wlan.wpdma_rx = res->start + MT_RXQ_WED_DATA_RING_BASE;
 	}
 	wed->wlan.nbuf = 4096;
 	wed->wlan.tx_tbit[0] = is_mt7915(&dev->mt76) ? 4 : 30;
 	wed->wlan.tx_tbit[1] = is_mt7915(&dev->mt76) ? 5 : 31;
-	wed->wlan.txfree_tbit = is_mt7915(&dev->mt76) ? 1 : 2;
+	wed->wlan.txfree_tbit = is_mt7986(&dev->mt76) ? 2 : 1;
 	wed->wlan.token_start = MT7915_TOKEN_SIZE - wed->wlan.nbuf;
+
+	wed->wlan.rx_nbuf = 65536;
+	wed->wlan.rx_npkt = MT7915_WED_RX_TOKEN_SIZE;
+	wed->wlan.rx_size = MTK_WED_RX_PKT_SIZE;
+	if (is_mt7915(&dev->mt76)) {
+		wed->wlan.rx_tbit[0] = 16;
+		wed->wlan.rx_tbit[1] = 17;
+	} else if (is_mt7986(&dev->mt76)) {
+		wed->wlan.rx_tbit[0] = 22;
+		wed->wlan.rx_tbit[1] = 23;
+	} else {
+		wed->wlan.rx_tbit[0] = 18;
+		wed->wlan.rx_tbit[1] = 19;
+	}
+
 	wed->wlan.init_buf = mt7915_wed_init_buf;
 	wed->wlan.offload_enable = mt7915_mmio_wed_offload_enable;
 	wed->wlan.offload_disable = mt7915_mmio_wed_offload_disable;
+	wed->wlan.init_rx_buf = mt7915_wed_init_rx_buf;
+	wed->wlan.release_rx_buf = mt7915_wed_release_rx_buf;
+
+	dev->mt76.rx_token_size = wed->wlan.rx_npkt;
 
 	if (mtk_wed_device_attach(wed))
 		return 0;
