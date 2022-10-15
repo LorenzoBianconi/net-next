@@ -3,6 +3,7 @@
 
 #include <linux/etherdevice.h>
 #include <linux/timekeeping.h>
+#include <linux/soc/mediatek/mtk_wed.h>
 #include "mt7915.h"
 #include "../dma.h"
 #include "mac.h"
@@ -805,6 +806,80 @@ u32 mt7915_wed_init_buf(void *ptr, dma_addr_t phys, int token_id)
 	txp->buf[0] = cpu_to_le32(phys + MT_TXD_SIZE + sizeof(*txp));
 
 	return MT_TXD_SIZE + sizeof(*txp);
+}
+
+u32 mt7915_wed_init_rx_buf(struct mtk_wed_device *wed, int size)
+{
+	struct mtk_rxbm_desc *desc = wed->rx_buf_ring.desc;
+	struct mt7915_dev *dev;
+	u32 length;
+	int i;
+
+	dev = container_of(wed, struct mt7915_dev, mt76.mmio.wed);
+	length = SKB_DATA_ALIGN(NET_SKB_PAD + wed->wlan.rx_size +
+				sizeof(struct skb_shared_info));
+
+	for (i = 0; i < size; i++) {
+		struct mt76_txwi_cache *t = mt76_get_rxwi(&dev->mt76);
+		dma_addr_t phy_addr;
+		int token;
+		void *ptr;
+
+		ptr = page_frag_alloc(&wed->rx_buf_ring.rx_page, length,
+				      GFP_KERNEL);
+		if (!ptr)
+			goto unmap;
+
+		phy_addr = dma_map_single(dev->mt76.dma_dev, ptr,
+					  wed->wlan.rx_size,
+					  DMA_TO_DEVICE);
+		if (unlikely(dma_mapping_error(dev->mt76.dev, phy_addr))) {
+			skb_free_frag(ptr);
+			goto unmap;
+		}
+
+		desc->buf0 = cpu_to_le32(phy_addr);
+		token = mt76_rx_token_consume(&dev->mt76, ptr, t, phy_addr);
+		desc->token |= cpu_to_le32(FIELD_PREP(MT_DMA_CTL_TOKEN,
+						      token));
+		desc++;
+	}
+
+	return 0;
+
+unmap:
+	mt7915_wed_release_rx_buf(wed);
+	return -ENOMEM;
+}
+
+void mt7915_wed_release_rx_buf(struct mtk_wed_device *wed)
+{
+	struct mt7915_dev *dev;
+	struct page *page;
+	int i;
+
+	dev = container_of(wed, struct mt7915_dev, mt76.mmio.wed);
+	for (i = 0; i < dev->mt76.rx_token_size; i++) {
+		struct mt76_txwi_cache *t;
+
+		t = mt76_rx_token_release(&dev->mt76, i);
+		if (!t || !t->ptr)
+			continue;
+
+		dma_unmap_single(dev->mt76.dma_dev, t->dma_addr,
+				 wed->wlan.rx_size, DMA_FROM_DEVICE);
+		skb_free_frag(t->ptr);
+		t->ptr = NULL;
+
+		mt76_put_rxwi(&dev->mt76, t);
+	}
+
+	if (!wed->rx_buf_ring.rx_page.va)
+		return;
+
+	page = virt_to_page(wed->rx_buf_ring.rx_page.va);
+	__page_frag_cache_drain(page, wed->rx_buf_ring.rx_page.pagecnt_bias);
+	memset(&wed->rx_buf_ring.rx_page, 0, sizeof(wed->rx_buf_ring.rx_page));
 }
 
 static void
