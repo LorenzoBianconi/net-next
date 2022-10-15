@@ -552,11 +552,9 @@ free_skb:
 static int
 mt76_dma_rx_fill(struct mt76_dev *dev, struct mt76_queue *q)
 {
-	dma_addr_t addr;
-	void *buf;
-	int frames = 0;
-	int len = SKB_WITH_OVERHEAD(q->buf_size);
 	int offset = q->buf_offset;
+	int len, frames = 0;
+	dma_addr_t addr;
 
 	if (!q->ndesc)
 		return 0;
@@ -564,9 +562,25 @@ mt76_dma_rx_fill(struct mt76_dev *dev, struct mt76_queue *q)
 	spin_lock_bh(&q->lock);
 
 	while (q->queued < q->ndesc - 1) {
+		struct mt76_txwi_cache *t = NULL;
+		struct page_frag_cache *rx_page;
 		struct mt76_queue_buf qbuf;
+		void *buf = NULL;
 
-		buf = page_frag_alloc(&q->rx_page, q->buf_size, GFP_ATOMIC);
+		if (mtk_wed_device_active(&dev->mmio.wed) &&
+		    FIELD_GET(MT_QFLAG_WED_TYPE, q->flags) == MT76_WED_Q_RX) {
+			t = mt76_get_rxwi(dev);
+			if (!t)
+				break;
+
+			len = MTK_WED_RX_PKT_SIZE;
+			rx_page = &dev->mmio.wed.rx_buf_ring.rx_page;
+		} else {
+			len = SKB_WITH_OVERHEAD(q->buf_size);
+			rx_page = &q->rx_page;
+		}
+
+		buf = page_frag_alloc(rx_page, q->buf_size, GFP_ATOMIC);
 		if (!buf)
 			break;
 
@@ -579,7 +593,7 @@ mt76_dma_rx_fill(struct mt76_dev *dev, struct mt76_queue *q)
 		qbuf.addr = addr + offset;
 		qbuf.len = len - offset;
 		qbuf.skip_unmap = false;
-		mt76_dma_add_buf(dev, q, &qbuf, 1, 0, buf, NULL);
+		mt76_dma_add_buf(dev, q, &qbuf, 1, 0, buf, t);
 		frames++;
 	}
 
