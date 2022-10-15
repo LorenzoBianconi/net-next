@@ -639,6 +639,11 @@ mt76_dma_wed_setup(struct mt76_dev *dev, struct mt76_queue *q)
 		if (!ret)
 			q->wed_regs = wed->txfree_ring.reg_base;
 		break;
+	case MT76_WED_Q_RX:
+		ret = mtk_wed_device_rx_ring_setup(wed, ring, q->regs);
+		if (!ret)
+			q->wed_regs = wed->rx_ring[ring].reg_base;
+		break;
 	default:
 		ret = -EINVAL;
 	}
@@ -661,8 +666,15 @@ mt76_dma_alloc_queue(struct mt76_dev *dev, struct mt76_queue *q,
 
 	q->regs = dev->mmio.regs + ring_base + idx * MT_RING_SIZE;
 	q->ndesc = n_desc;
-	q->buf_size = bufsize;
 	q->hw_idx = idx;
+
+	if (mtk_wed_device_active(&dev->mmio.wed) &&
+	    FIELD_GET(MT_QFLAG_WED_TYPE, q->flags) == MT76_WED_Q_RX)
+		q->buf_size = SKB_DATA_ALIGN(NET_SKB_PAD +
+				MTK_WED_RX_PKT_SIZE +
+				SKB_DATA_ALIGN(sizeof(struct skb_shared_info)));
+	else
+		q->buf_size = bufsize;
 
 	size = q->ndesc * sizeof(struct mt76_desc);
 	q->desc = dmam_alloc_coherent(dev->dma_dev, size, &q->desc_dma, GFP_KERNEL);
@@ -930,8 +942,11 @@ void mt76_dma_cleanup(struct mt76_dev *dev)
 		mt76_dma_tx_cleanup(dev, dev->q_mcu[i], true);
 
 	mt76_for_each_q_rx(dev, i) {
+		struct mt76_queue *q = &dev->q_rx[i];
+
 		netif_napi_del(&dev->napi[i]);
-		mt76_dma_rx_cleanup(dev, &dev->q_rx[i]);
+		if (FIELD_GET(MT_QFLAG_WED_TYPE, q->flags))
+			mt76_dma_rx_cleanup(dev, q);
 	}
 
 	mt76_free_pending_txwi(dev);
