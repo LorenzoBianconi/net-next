@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)
 %YAML 1.2
 ---
-$id: "http://devicetree.org/schemas/arm/mediatek/mediatek,mt7622-wed.yaml#"
-$schema: "http://devicetree.org/meta-schemas/core.yaml#"
+$id: http://devicetree.org/schemas/arm/mediatek/mediatek,mt7622-wed.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
 
 title: MediaTek Wireless Ethernet Dispatch Controller for MT7622
 
@@ -29,6 +29,50 @@ properties:
   interrupts:
     maxItems: 1
 
+  memory-region:
+    items:
+      - description:
+          Phandle for the node used to run firmware EMI region
+      - description:
+          Phandle for the node used to run firmware ILM region
+      - description:
+          Phandle for the node used to run firmware CPU DATA region
+
+  memory-region-names:
+    items:
+      - const: wo-emi
+      - const: wo-ilm
+      - const: wo-data
+
+  mediatek,wo-ccif:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description:
+      Phandle to the mediatek wed-wo controller.
+
+  mediatek,wo-boot:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description:
+      Phandle to the mediatek wed-wo boot interface.
+
+  mediatek,wo-dlm:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description:
+      Phandle to the mediatek wed-wo rx hw ring.
+
+allOf:
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: mediatek,mt7622-wed
+    then:
+      properties:
+        memory-region-names: false
+        memory-region: false
+        mediatek,wo-boot: false
+        mediatek,wo-ccif: false
+        mediatek,wo-dlm: false
+
 required:
   - compatible
   - reg
@@ -44,8 +88,20 @@ examples:
       #address-cells = <2>;
       #size-cells = <2>;
       wed0: wed@1020a000 {
-        compatible = "mediatek,mt7622-wed","syscon";
+        compatible = "mediatek,mt7622-wed", "syscon";
         reg = <0 0x1020a000 0 0x1000>;
         interrupts = <GIC_SPI 214 IRQ_TYPE_LEVEL_LOW>;
+      };
+
+      wed1: wed@15010000 {
+        compatible = "mediatek,mt7986-wed", "syscon";
+        reg = <0 0x15010000 0 0x1000>;
+        interrupts = <GIC_SPI 205 IRQ_TYPE_LEVEL_HIGH>;
+
+        memory-region = <&wo_emi>, <&wo_data>, <&wo_ilm>;
+        memory-region-names = "wo-emi", "wo-ilm", "wo-data";
+        mediatek,wo-ccif = <&wo_ccif0>;
+        mediatek,wo-boot = <&wo_boot>;
+        mediatek,wo-dlm = <&wo_dlm0>;
       };
     };
