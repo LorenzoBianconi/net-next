@@ -29,6 +29,59 @@ properties:
   interrupts:
     maxItems: 1
 
+  mediatek,wocpu_emi:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    maxItems: 1
+    description:
+      Phandle to a node describing reserved memory used by mtk wed firmware
+      (see bindings/reserved-memory/reserved-memory.txt)
+
+  mediatek,wocpu_data:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    maxItems: 1
+    description:
+      Phandle to a node describing reserved memory used by mtk wed firmware
+      (see bindings/reserved-memory/reserved-memory.txt)
+
+  mediatek,wocpu_ilm:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    maxItems: 1
+    description:
+      Phandle to a node describing memory used by mtk wed firmware
+
+  mediatek,ap2woccif:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    maxItems: 1
+    description:
+      Phandle to the mediatek wed-wo controller.
+
+  mediatek,wocpu_boot:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    maxItems: 1
+    description:
+      Phandle to the mediatek wed-wo boot interface.
+
+  mediatek,wocpu_dlm:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    maxItems: 1
+    description:
+      Phandle to the mediatek wed-wo rx hw ring.
+
+allOf:
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: mediatek,mt7986-wed
+    then:
+      properties:
+        mediatek,wocpu_data: true
+        mediatek,wocpu_boot: true
+        mediatek,wocpu_emi: true
+        mediatek,wocpu_ilm: true
+        mediatek,ap2woccif: true
+        mediatek,wocpu_dlm: true
+
 required:
   - compatible
   - reg
@@ -47,5 +100,78 @@ examples:
         compatible = "mediatek,mt7622-wed","syscon";
         reg = <0 0x1020a000 0 0x1000>;
         interrupts = <GIC_SPI 214 IRQ_TYPE_LEVEL_LOW>;
+      };
+    };
+
+  - |
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+    #include <dt-bindings/interrupt-controller/irq.h>
+    #include <dt-bindings/reset/ti-syscon.h>
+    soc {
+      #address-cells = <2>;
+      #size-cells = <2>;
+      reserved-memory {
+        #address-cells = <2>;
+        #size-cells = <2>;
+        wocpu0_emi: wocpu0_emi@4fd00000 {
+          reg = <0 0x4fd00000 0 0x40000>;
+          no-map;
+        };
+
+        wocpu_data: wocpu_data@4fd80000 {
+          reg = <0 0x4fd80000 0 0x240000>;
+          no-map;
+        };
+      };
+
+      ethsys: syscon@15000000 {
+        #address-cells = <1>;
+        #size-cells = <1>;
+        compatible = "mediatek,mt7986-ethsys", "syscon";
+        reg = <0 0x15000000 0 0x1000>;
+
+        #clock-cells = <1>;
+        #reset-cells = <1>;
+        ethsysrst: reset-controller {
+          compatible = "ti,syscon-reset";
+          #reset-cells = <1>;
+          ti,reset-bits = <0x34 4 0x34 4 0x34 4 (ASSERT_SET | DEASSERT_CLEAR | STATUS_SET)>;
+        };
+      };
+
+      wocpu0_ilm: wocpu0_ilm@151e0000 {
+        compatible = "mediatek,wocpu0_ilm";
+        reg = <0 0x151e0000 0 0x8000>;
+      };
+
+      cpu_boot: wocpu_boot@15194000 {
+        compatible = "mediatek,wocpu_boot", "syscon";
+        reg = <0 0x15194000 0 0x1000>;
+      };
+
+      ap2woccif0: ap2woccif@151a5000 {
+        compatible = "mediatek,ap2woccif", "syscon";
+        reg = <0 0x151a5000 0 0x1000>;
+        interrupts = <GIC_SPI 211 IRQ_TYPE_LEVEL_HIGH>;
+      };
+
+      wocpu0_dlm: wocpu_dlm@151e8000 {
+        compatible = "mediatek,wocpu_dlm";
+        reg = <0 0x151e8000 0 0x2000>;
+        resets = <&ethsysrst 0>;
+        reset-names = "wocpu_rst";
+      };
+
+      wed1: wed@1020a000 {
+        compatible = "mediatek,mt7986-wed","syscon";
+        reg = <0 0x15010000 0 0x1000>;
+        interrupts = <GIC_SPI 205 IRQ_TYPE_LEVEL_HIGH>;
+
+        mediatek,wocpu_data = <&wocpu_data>;
+        mediatek,ap2woccif = <&ap2woccif0>;
+        mediatek,wocpu_ilm = <&wocpu0_ilm>;
+        mediatek,wocpu_dlm = <&wocpu0_dlm>;
+        mediatek,wocpu_emi = <&wocpu_emi>;
+        mediatek,wocpu_boot = <&cpu_boot>;
       };
     };
