@@ -766,8 +766,10 @@ int mt76_rx_token_consume(struct mt76_dev *dev, void *ptr,
 			  GFP_ATOMIC);
 	spin_unlock_bh(&dev->rx_token_lock);
 
-	t->ptr = ptr;
-	t->dma_addr = phys;
+	if (token >= 0) {
+		t->ptr = ptr;
+		t->dma_addr = phys;
+	}
 
 	return token;
 }
