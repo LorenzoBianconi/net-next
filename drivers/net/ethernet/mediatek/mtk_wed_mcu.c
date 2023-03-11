@@ -18,12 +18,23 @@
 
 static u32 wo_r32(struct mtk_wed_wo *wo, u32 reg)
 {
-	return readl(wo->boot.addr + reg);
+	u32 val;
+
+	if (!wo->boot_regmap)
+		return readl(wo->boot.addr + reg);
+
+	if (regmap_read(wo->boot_regmap, reg, &val))
+		val = ~0;
+
+	return val;
 }
 
 static void wo_w32(struct mtk_wed_wo *wo, u32 reg, u32 val)
 {
-	writel(val, wo->boot.addr + reg);
+	if (wo->boot_regmap)
+		regmap_write(wo->boot_regmap, reg, val);
+	else
+		writel(val, wo->boot.addr + reg);
 }
 
 static struct sk_buff *
@@ -316,10 +327,21 @@ mtk_wed_mcu_load_firmware(struct mtk_wed_wo *wo)
 			return ret;
 	}
 
-	wo->boot.name = "wo-boot";
-	ret = mtk_wed_get_reserved_memory_region(wo, &wo->boot);
-	if (ret)
-		return ret;
+	wo->boot_regmap = syscon_regmap_lookup_by_phandle(wo->hw->node,
+							  "mediatek,wo-cpuboot");
+	if (IS_ERR(wo->boot_regmap)) {
+		if (wo->boot_regmap != ERR_PTR(-ENODEV))
+			return PTR_ERR(wo->boot_regmap);
+
+		/* For backward compatibility, we need to check if cpu_boot
+		 * is defined through reserved memory property.
+		 */
+		wo->boot_regmap = NULL;
+		wo->boot.name = "wo-boot";
+		ret = mtk_wed_get_reserved_memory_region(wo, &wo->boot);
+		if (ret)
+			return ret;
+	}
 
 	/* set dummy cr */
 	wed_w32(wo->hw->wed_dev, MTK_WED_SCR0 + 4 * MTK_WED_DUMMY_CR_FWDL,
