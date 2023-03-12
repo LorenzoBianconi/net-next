@@ -215,8 +215,8 @@ int mtk_wed_mcu_msg_update(struct mtk_wed_device *dev, int id, void *data,
 }
 
 static int
-mtk_wed_get_memory_region(struct mtk_wed_wo *wo,
-			  struct mtk_wed_wo_memory_region *region)
+mtk_wed_get_reserved_memory_region(struct mtk_wed_wo *wo,
+				   struct mtk_wed_wo_memory_region *region)
 {
 	struct reserved_mem *rmem;
 	struct device_node *np;
@@ -311,13 +311,13 @@ mtk_wed_mcu_load_firmware(struct mtk_wed_wo *wo)
 
 	/* load firmware region metadata */
 	for (i = 0; i < ARRAY_SIZE(mem_region); i++) {
-		ret = mtk_wed_get_memory_region(wo, &mem_region[i]);
+		ret = mtk_wed_get_reserved_memory_region(wo, &mem_region[i]);
 		if (ret)
 			return ret;
 	}
 
 	wo->boot.name = "wo-boot";
-	ret = mtk_wed_get_memory_region(wo, &wo->boot);
+	ret = mtk_wed_get_reserved_memory_region(wo, &wo->boot);
 	if (ret)
 		return ret;
 
