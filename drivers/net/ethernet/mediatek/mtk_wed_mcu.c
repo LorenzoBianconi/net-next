@@ -300,6 +300,52 @@ next:
 }
 
 static int
+mtk_wed_mcu_load_memory_regions(struct mtk_wed_wo *wo,
+				struct mtk_wed_wo_memory_region *region)
+{
+	struct device_node *np;
+	int ret;
+
+	/* firmware EMI memory region */
+	ret = mtk_wed_get_reserved_memory_region(wo,
+			&region[MTK_WED_WO_REGION_EMI]);
+	if (ret)
+		return ret;
+
+	/* firmware DATA memory region */
+	ret = mtk_wed_get_reserved_memory_region(wo,
+			&region[MTK_WED_WO_REGION_DATA]);
+	if (ret)
+		return ret;
+
+	np = of_parse_phandle(wo->hw->node, "mediatek,wo-ilm", 0);
+	if (np) {
+		struct mtk_wed_wo_memory_region *ilm_region;
+		struct resource res;
+
+		ret = of_address_to_resource(np, 0, &res);
+		of_node_put(np);
+
+		if (ret < 0)
+			return ret;
+
+		ilm_region = &region[MTK_WED_WO_REGION_ILM];
+		ilm_region->phy_addr = res.start;
+		ilm_region->size = resource_size(&res);
+		ilm_region->addr = devm_ioremap(wo->hw->dev, ilm_region->phy_addr,
+						ilm_region->size);
+
+		return ilm_region->addr ? 0 : -ENOMEM;
+	}
+
+	/* For backward compatibility, we need to check if ILM
+	 * node is defined through reserved memory property.
+	 */
+	return mtk_wed_get_reserved_memory_region(wo,
+			&region[MTK_WED_WO_REGION_ILM]);
+}
+
+static int
 mtk_wed_mcu_load_firmware(struct mtk_wed_wo *wo)
 {
 	static struct mtk_wed_wo_memory_region mem_region[] = {
@@ -320,12 +366,9 @@ mtk_wed_mcu_load_firmware(struct mtk_wed_wo *wo)
 	u32 val, boot_cr;
 	int ret, i;
 
-	/* load firmware region metadata */
-	for (i = 0; i < ARRAY_SIZE(mem_region); i++) {
-		ret = mtk_wed_get_reserved_memory_region(wo, &mem_region[i]);
-		if (ret)
-			return ret;
-	}
+	ret = mtk_wed_mcu_load_memory_regions(wo, mem_region);
+	if (ret)
+		return ret;
 
 	wo->boot_regmap = syscon_regmap_lookup_by_phandle(wo->hw->node,
 							  "mediatek,wo-cpuboot");
