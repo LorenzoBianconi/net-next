@@ -93,16 +93,6 @@
 			reg = <0 0x4fd80000 0 0x240000>;
 			no-map;
 		};
-
-		wo_dlm0: wo-dlm@151e8000 {
-			reg = <0 0x151e8000 0 0x2000>;
-			no-map;
-		};
-
-		wo_dlm1: wo-dlm@151f8000 {
-			reg = <0 0x151f8000 0 0x2000>;
-			no-map;
-		};
 	};
 
 	timer {
@@ -444,10 +434,11 @@
 			reg = <0 0x15010000 0 0x1000>;
 			interrupt-parent = <&gic>;
 			interrupts = <GIC_SPI 205 IRQ_TYPE_LEVEL_HIGH>;
-			memory-region = <&wo_emi0>, <&wo_dlm0>, <&wo_data>;
-			memory-region-names = "wo-emi", "wo-dlm", "wo-data";
+			memory-region = <&wo_emi0>, <&wo_data>;
+			memory-region-names = "wo-emi", "wo-data";
 			mediatek,wo-ccif = <&wo_ccif0>;
 			mediatek,wo-ilm = <&wo_ilm0>;
+			mediatek,wo-dlm = <&wo_dlm0>;
 			mediatek,wo-cpuboot = <&wo_cpuboot>;
 		};
 
@@ -457,10 +448,11 @@
 			reg = <0 0x15011000 0 0x1000>;
 			interrupt-parent = <&gic>;
 			interrupts = <GIC_SPI 206 IRQ_TYPE_LEVEL_HIGH>;
-			memory-region = <&wo_emi1>, <&wo_dlm1>, <&wo_data>;
-			memory-region-names = "wo-emi", "wo-dlm", "wo-data";
+			memory-region = <&wo_emi1>, <&wo_data>;
+			memory-region-names = "wo-emi", "wo-data";
 			mediatek,wo-ccif = <&wo_ccif1>;
 			mediatek,wo-ilm = <&wo_ilm1>;
+			mediatek,wo-dlm = <&wo_dlm1>;
 			mediatek,wo-cpuboot = <&wo_cpuboot>;
 		};
 
@@ -486,6 +478,16 @@
 		wo_ilm1: syscon@151f0000 {
 			compatible = "mediatek,mt7986-wo-ilm", "syscon";
 			reg = <0 0x151f0000 0 0x8000>;
+		};
+
+		wo_dlm0: syscon@151e8000 {
+			compatible = "mediatek,mt7986-wo-dlm", "syscon";
+			reg = <0 0x151e8000 0 0x2000>;
+		};
+
+		wo_dlm1: syscon@151f8000 {
+			compatible = "mediatek,mt7986-wo-dlm", "syscon";
+			reg = <0 0x151f8000 0 0x2000>;
 		};
 
 		wo_cpuboot: syscon@15194000 {
