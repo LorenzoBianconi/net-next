@@ -32,14 +32,12 @@ properties:
   memory-region:
     items:
       - description: firmware EMI region
-      - description: firmware ILM region
       - description: firmware DLM region
       - description: firmware CPU DATA region
 
   memory-region-names:
     items:
       - const: wo-emi
-      - const: wo-ilm
       - const: wo-dlm
       - const: wo-data
 
@@ -50,6 +48,10 @@ properties:
   mediatek,wo-cpuboot:
     $ref: /schemas/types.yaml#/definitions/phandle
     description: mediatek wed-wo cpuboot controller interface.
+
+  mediatek,wo-ilm:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: mediatek wed-wo ilm interface.
 
 allOf:
   - if:
@@ -63,6 +65,7 @@ allOf:
         memory-region: false
         mediatek,wo-ccif: false
         mediatek,wo-cpuboot: false
+        mediatek,wo-ilm: false
 
 required:
   - compatible
@@ -97,11 +100,10 @@ examples:
         reg = <0 0x15010000 0 0x1000>;
         interrupts = <GIC_SPI 205 IRQ_TYPE_LEVEL_HIGH>;
 
-        memory-region = <&wo_emi>, <&wo_ilm>, <&wo_dlm>,
-                        <&wo_data>;
-        memory-region-names = "wo-emi", "wo-ilm", "wo-dlm",
-                              "wo-data";
+        memory-region = <&wo_emi>, <&wo_dlm>, &wo_data>;
+        memory-region-names = "wo-emi", "wo-dlm", "wo-data";
         mediatek,wo-ccif = <&wo_ccif0>;
         mediatek,wo-cpuboot = <&wo_cpuboot>;
+        mediatek,wo-ilm = <&wo_ilm>;
       };
     };
