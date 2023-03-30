@@ -817,6 +817,41 @@ drop:
 	return -ENOMEM;
 }
 
+static void veth_rcv_skb_update(struct veth_rq *rq, struct xdp_buff *xdp,
+				struct sk_buff *skb, void *data,
+				void *data_end)
+{
+	u32 metalen = xdp->data - xdp->data_meta;
+	int off = data - xdp->data;
+
+	/* check if bpf_xdp_adjust_head was used */
+	if (off > 0)
+		__skb_push(skb, off);
+	else if (off < 0)
+		__skb_pull(skb, -off);
+
+	skb_reset_mac_header(skb);
+
+	/* check if bpf_xdp_adjust_tail was used */
+	off = xdp->data_end - data_end;
+	if (off != 0)
+		__skb_put(skb, off); /* positive on grow, negative on shrink */
+
+	/* XDP frag metadata (e.g. nr_frags) are updated in eBPF helpers
+	 * (e.g. bpf_xdp_adjust_tail), we need to update data_len here.
+	 */
+	if (xdp_buff_has_frags(xdp))
+		skb->data_len = skb_shinfo(skb)->xdp_frags_size;
+	else
+		skb->data_len = 0;
+
+	skb->protocol = eth_type_trans(skb, rq->dev);
+
+	metalen = xdp->data - xdp->data_meta;
+	if (metalen)
+		skb_metadata_set(skb, metalen);
+}
+
 static struct sk_buff *veth_xdp_rcv_skb(struct veth_rq *rq,
 					struct sk_buff *skb,
 					struct veth_xdp_tx_bq *bq,
@@ -826,8 +861,7 @@ static struct sk_buff *veth_xdp_rcv_skb(struct veth_rq *rq,
 	struct bpf_prog *xdp_prog;
 	struct veth_xdp_buff vxbuf;
 	struct xdp_buff *xdp = &vxbuf.xdp;
-	u32 act, metalen;
-	int off;
+	u32 act;
 
 	skb_prepare_for_gro(skb);
 
@@ -864,12 +898,10 @@ static struct sk_buff *veth_xdp_rcv_skb(struct veth_rq *rq,
 		rcu_read_unlock();
 		goto xdp_xmit;
 	case XDP_REDIRECT:
-		veth_xdp_get(xdp);
-		consume_skb(skb);
-		xdp->rxq->mem = rq->xdp_mem;
-		if (xdp_do_redirect(rq->dev, xdp, xdp_prog)) {
+		veth_rcv_skb_update(rq, xdp, skb, orig_data, orig_data_end);
+		if (xdp_do_generic_redirect(rq->dev, skb, xdp, xdp_prog)) {
 			stats->rx_drops++;
-			goto err_xdp;
+			goto xdp_drop;
 		}
 		stats->xdp_redirect++;
 		rcu_read_unlock();
@@ -886,33 +918,7 @@ static struct sk_buff *veth_xdp_rcv_skb(struct veth_rq *rq,
 	}
 	rcu_read_unlock();
 
-	/* check if bpf_xdp_adjust_head was used */
-	off = orig_data - xdp->data;
-	if (off > 0)
-		__skb_push(skb, off);
-	else if (off < 0)
-		__skb_pull(skb, -off);
-
-	skb_reset_mac_header(skb);
-
-	/* check if bpf_xdp_adjust_tail was used */
-	off = xdp->data_end - orig_data_end;
-	if (off != 0)
-		__skb_put(skb, off); /* positive on grow, negative on shrink */
-
-	/* XDP frag metadata (e.g. nr_frags) are updated in eBPF helpers
-	 * (e.g. bpf_xdp_adjust_tail), we need to update data_len here.
-	 */
-	if (xdp_buff_has_frags(xdp))
-		skb->data_len = skb_shinfo(skb)->xdp_frags_size;
-	else
-		skb->data_len = 0;
-
-	skb->protocol = eth_type_trans(skb, rq->dev);
-
-	metalen = xdp->data - xdp->data_meta;
-	if (metalen)
-		skb_metadata_set(skb, metalen);
+	veth_rcv_skb_update(rq, xdp, skb, orig_data, orig_data_end);
 out:
 	return skb;
 drop:
