@@ -466,8 +466,10 @@ static int veth_xdp_xmit(struct net_device *dev, int n,
 
 	rcu_read_lock();
 	rcv = rcu_dereference(priv->peer);
-	if (unlikely(!rcv))
-		goto out;
+	if (unlikely(!rcv)) {
+		rcu_read_unlock();
+		return -ENXIO;
+	}
 
 	rcv_priv = netdev_priv(rcv);
 	rq = &rcv_priv->rq[veth_select_rxq(rcv)];
@@ -495,6 +497,7 @@ static int veth_xdp_xmit(struct net_device *dev, int n,
 		__veth_xdp_flush(rq);
 
 	ret = nxmit;
+out:
 	if (ndo_xmit) {
 		u64_stats_update_begin(&rq->stats.syncp);
 		rq->stats.vs.peer_tq_xdp_xmit += nxmit;
@@ -502,7 +505,6 @@ static int veth_xdp_xmit(struct net_device *dev, int n,
 		u64_stats_update_end(&rq->stats.syncp);
 	}
 
-out:
 	rcu_read_unlock();
 
 	return ret;
