@@ -31,9 +31,12 @@
 #define DRV_NAME	"veth"
 #define DRV_VERSION	"1.0"
 
-#define VETH_XDP_FLAG		BIT(0)
-#define VETH_RING_SIZE		256
-#define VETH_XDP_HEADROOM	(XDP_PACKET_HEADROOM + NET_IP_ALIGN)
+#define VETH_XDP_FLAG			BIT(0)
+#define VETH_RING_SIZE			256
+#define VETH_XDP_PACKET_HEADROOM	192
+#define VETH_XDP_HEADROOM		(VETH_XDP_PACKET_HEADROOM + \
+					 NET_IP_ALIGN)
+#define VETH_PAGE_POOL_FRAG_SIZE	2048
 
 #define VETH_XDP_TX_BULK_SIZE	16
 #define VETH_XDP_BATCH		16
@@ -736,7 +739,7 @@ static int veth_convert_skb_to_xdp_buff(struct veth_rq *rq,
 	if (skb_shared(skb) || skb_head_is_locked(skb) ||
 	    skb_shinfo(skb)->nr_frags ||
 	    skb_headroom(skb) < XDP_PACKET_HEADROOM) {
-		u32 size, len, max_head_size, off;
+		u32 size, len, max_head_size, off, pp_off;
 		struct sk_buff *nskb;
 		struct page *page;
 		int i, head_off;
@@ -747,17 +750,20 @@ static int veth_convert_skb_to_xdp_buff(struct veth_rq *rq,
 		 *
 		 * Make sure we have enough space for linear and paged area
 		 */
-		max_head_size = SKB_WITH_OVERHEAD(PAGE_SIZE -
+		max_head_size = SKB_WITH_OVERHEAD(VETH_PAGE_POOL_FRAG_SIZE -
 						  VETH_XDP_HEADROOM);
-		if (skb->len > PAGE_SIZE * MAX_SKB_FRAGS + max_head_size)
+		if (skb->len >
+		    VETH_PAGE_POOL_FRAG_SIZE * MAX_SKB_FRAGS + max_head_size)
 			goto drop;
 
 		/* Allocate skb head */
-		page = page_pool_dev_alloc_pages(rq->page_pool);
+		page = page_pool_dev_alloc_frag(rq->page_pool, &pp_off,
+						VETH_PAGE_POOL_FRAG_SIZE);
 		if (!page)
 			goto drop;
 
-		nskb = napi_build_skb(page_address(page), PAGE_SIZE);
+		nskb = napi_build_skb(page_address(page) + pp_off,
+				      VETH_PAGE_POOL_FRAG_SIZE);
 		if (!nskb) {
 			page_pool_put_full_page(rq->page_pool, page, true);
 			goto drop;
@@ -782,15 +788,18 @@ static int veth_convert_skb_to_xdp_buff(struct veth_rq *rq,
 		len = skb->len - off;
 
 		for (i = 0; i < MAX_SKB_FRAGS && off < skb->len; i++) {
-			page = page_pool_dev_alloc_pages(rq->page_pool);
+			page = page_pool_dev_alloc_frag(rq->page_pool, &pp_off,
+							VETH_PAGE_POOL_FRAG_SIZE);
 			if (!page) {
 				consume_skb(nskb);
 				goto drop;
 			}
 
-			size = min_t(u32, len, PAGE_SIZE);
-			skb_add_rx_frag(nskb, i, page, 0, size, PAGE_SIZE);
-			if (skb_copy_bits(skb, off, page_address(page),
+			size = min_t(u32, len, VETH_PAGE_POOL_FRAG_SIZE);
+			skb_add_rx_frag(nskb, i, page, pp_off, size,
+					VETH_PAGE_POOL_FRAG_SIZE);
+			if (skb_copy_bits(skb, off,
+					  page_address(page) + pp_off,
 					  size)) {
 				consume_skb(nskb);
 				goto drop;
@@ -1035,6 +1044,7 @@ static int veth_create_page_pool(struct veth_rq *rq)
 	struct page_pool_params pp_params = {
 		.order = 0,
 		.pool_size = VETH_RING_SIZE,
+		.flags = PP_FLAG_PAGE_FRAG,
 		.nid = NUMA_NO_NODE,
 		.dev = &rq->dev->dev,
 	};
@@ -1634,13 +1644,14 @@ static int veth_xdp_set(struct net_device *dev, struct bpf_prog *prog,
 			goto err;
 		}
 
-		max_mtu = SKB_WITH_OVERHEAD(PAGE_SIZE - VETH_XDP_HEADROOM) -
+		max_mtu = SKB_WITH_OVERHEAD(VETH_PAGE_POOL_FRAG_SIZE -
+					    VETH_XDP_HEADROOM) -
 			  peer->hard_header_len;
 		/* Allow increasing the max_mtu if the program supports
 		 * XDP fragments.
 		 */
 		if (prog->aux->xdp_has_frags)
-			max_mtu += PAGE_SIZE * MAX_SKB_FRAGS;
+			max_mtu += VETH_PAGE_POOL_FRAG_SIZE * MAX_SKB_FRAGS;
 
 		if (peer->mtu > max_mtu) {
 			NL_SET_ERR_MSG_MOD(extack, "Peer MTU is too large to set XDP");
