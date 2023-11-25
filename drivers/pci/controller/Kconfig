@@ -185,6 +185,14 @@ config PCI_MVEBU
 	 is used on 32-bit Marvell ARM SoCs: Dove, Kirkwood, Armada 370,
 	 Armada XP, Armada 375, Armada 38x and Armada 39x.
 
+config PCIE_AIROHA
+	tristate "AIROHA PCIe controller"
+	depends on ARCH_AIROHA || COMPILE_TEST
+	depends on OF
+	help
+	  Say Y here if you want to enable PCIe controller support on
+	  AIROHA SoCs.
+
 config PCIE_MEDIATEK
 	tristate "MediaTek PCIe controller"
 	depends on ARCH_AIROHA || ARCH_MEDIATEK || COMPILE_TEST
