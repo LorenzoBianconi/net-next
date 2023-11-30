@@ -15,6 +15,7 @@
 #include <linux/of_platform.h>
 #include <linux/of_pci.h>
 #include <linux/pci.h>
+#include <linux/version.h>
 
 #include "../pci.h"
 
@@ -120,6 +121,13 @@
 #define PCIE_LINKDOWN_RST_EN	GENMASK(15, 13)
 #define PCIE_LINK_STATUS_V2	0x804
 #define PCIE_PORT_LINKUP_V2	BIT(10)
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,1,0)
+static bool of_property_present(const struct device_node *np, const char *propname)
+{
+	return of_property_read_bool(np, propname);
+}
+#endif
 
 /**
  * struct airoha_pcie - PCIe host information
