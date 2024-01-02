@@ -124,12 +124,12 @@
 /**
  * struct airoha_pcie - PCIe host information
  * @dev: pointer to PCIe device
- * @pcie_ck: pointer to transaction/data link layer clock
+ * @clk: pointer to transaction/data link layer clock
  * @ports: PCIe port list
  */
 struct airoha_pcie {
 	struct device *dev;
-	struct clk *pcie_ck;
+	struct clk *clk;
 	struct list_head ports;
 };
 
@@ -166,16 +166,16 @@ static int airoha_pcie_check_config_status(struct airoha_pcie_port *port)
 	return PCIBIOS_SUCCESSFUL;
 }
 
-static int __airoha_pcie_hw_read_config(struct airoha_pcie_port *port, u32 bus,
-					u32 devfn, int where, int size,
-					u32 hdr0_dword, u32 hdr1_dword,
-					u32 *val)
+static int airoha_pcie_hw_read_config(struct airoha_pcie_port *port, u32 bus,
+				      u32 devfn, int where, int size,
+				      u32 *val)
 {
 	u32 tmp;
 
 	/* Write PCIe configuration transaction header for Cfgrd */
-	writel(hdr0_dword, port->base + PCIE_CFG_HEADER0);
-	writel(hdr1_dword, port->base + PCIE_CFG_HEADER1);
+	writel(CFG_HEADER_DW0(CFG_WRRD_TYPE_0, CFG_RD_FMT),
+	       port->base + PCIE_CFG_HEADER0);
+	writel(CFG_HEADER_DW1(where, size), port->base + PCIE_CFG_HEADER1);
 	writel(CFG_HEADER_DW2(where, PCI_FUNC(devfn), PCI_SLOT(devfn), bus),
 	       port->base + PCIE_CFG_HEADER2);
 
@@ -199,28 +199,18 @@ static int __airoha_pcie_hw_read_config(struct airoha_pcie_port *port, u32 bus,
 	return PCIBIOS_SUCCESSFUL;
 }
 
-static int airoha_pcie_hw_read_config(struct airoha_pcie_port *port, u32 bus,
-				      u32 devfn, int where, u32 *val)
-{
-	u32 wrrd_type = bus ? CFG_WRRD_TYPE_1 : CFG_WRRD_TYPE_0;
-	u32 hdr0_dword = CFG_HEADER_DW0(wrrd_type, CFG_RD_FMT);
-	u32 hdr1_dword = CFG_DW2_DEV(PCI_SLOT(devfn)) | 0x070f;
-
-	return __airoha_pcie_hw_read_config(port, bus, devfn, where, 0,
-					    hdr0_dword, hdr1_dword, val);
-}
-
-static int __airoha_pcie_hw_write_config(struct airoha_pcie_port *port, u32 bus,
-					 u32 devfn, int where, u32 hdr1_dword,
-					 u32 val)
+static int airoha_pcie_hw_write_config(struct airoha_pcie_port *port, u32 bus,
+				       u32 devfn, int where, int size,
+				       u32 val)
 {
 	/* Write PCIe configuration transaction header for Cfgwr */
 	writel(CFG_HEADER_DW0(CFG_WRRD_TYPE_0, CFG_WR_FMT),
 	       port->base + PCIE_CFG_HEADER0);
-	writel(hdr1_dword, port->base + PCIE_CFG_HEADER1);
+	writel(CFG_HEADER_DW1(where, size), port->base + PCIE_CFG_HEADER1);
 	writel(CFG_HEADER_DW2(where, PCI_FUNC(devfn), PCI_SLOT(devfn), bus),
 	       port->base + PCIE_CFG_HEADER2);
 
+	val = val << 8 * (where & 3);
 	/* Write Cfgwr data */
 	writel(val, port->base + PCIE_CFG_WDATA);
 
@@ -230,15 +220,6 @@ static int __airoha_pcie_hw_write_config(struct airoha_pcie_port *port, u32 bus,
 
 	/* Check completion status */
 	return airoha_pcie_check_config_status(port);
-}
-
-static int airoha_pcie_hw_write_config(struct airoha_pcie_port *port, u32 bus,
-				       u32 devfn, int where, u32 val)
-{
-	u32 hdr1_dword = CFG_DW2_DEV(PCI_SLOT(devfn)) | 0x070f;
-
-	return __airoha_pcie_hw_write_config(port, bus, devfn, where,
-					     hdr1_dword, val);
 }
 
 static struct airoha_pcie_port *
@@ -270,8 +251,6 @@ airoha_pcie_find_port(struct pci_bus *bus, unsigned int devfn)
 static int airoha_pcie_config_read(struct pci_bus *bus, unsigned int devfn,
 				   int where, int size, u32 *val)
 {
-	u32 hdr0_dword = CFG_HEADER_DW0(CFG_WRRD_TYPE_0, CFG_RD_FMT);
-	u32 hdr1_dword = CFG_HEADER_DW1(where, size);
 	struct airoha_pcie_port *port;
 
 	port = airoha_pcie_find_port(bus, devfn);
@@ -280,23 +259,21 @@ static int airoha_pcie_config_read(struct pci_bus *bus, unsigned int devfn,
 		return PCIBIOS_DEVICE_NOT_FOUND;
 	}
 
-	return __airoha_pcie_hw_read_config(port, bus->number, devfn, where,
-					    size, hdr0_dword, hdr1_dword, val);
+	return airoha_pcie_hw_read_config(port, bus->number, devfn, where,
+					  size, val);
 }
 
 static int airoha_pcie_config_write(struct pci_bus *bus, unsigned int devfn,
 				    int where, int size, u32 val)
 {
-	u32 hdr1_dword = CFG_HEADER_DW1(where, size);
 	struct airoha_pcie_port *port;
 
 	port = airoha_pcie_find_port(bus, devfn);
 	if (!port)
 		return PCIBIOS_DEVICE_NOT_FOUND;
 
-	val = val << 8 * (where & 3);
-	return __airoha_pcie_hw_write_config(port, bus->number, devfn, where,
-					     hdr1_dword, val);
+	return airoha_pcie_hw_write_config(port, bus->number, devfn, where,
+					   size, val);
 }
 
 static struct pci_ops airoha_pcie_ops = {
@@ -346,7 +323,7 @@ static void airoha_pcie_free_port(struct airoha_pcie_port *port)
 	devm_kfree(dev, port);
 }
 
-static int airoha_pcie_start_port(struct airoha_pcie_port *port)
+static int airoha_pcie_startup_port(struct airoha_pcie_port *port)
 {
 	struct airoha_pcie *pcie = port->pcie;
 	struct pci_host_bridge *host = pci_host_bridge_from_priv(pcie);
@@ -393,7 +370,7 @@ static int airoha_pcie_start_port(struct airoha_pcie_port *port)
 
 	/* Set PCIe to AXI translation memory space.*/
 	writel(WIN_ENABLE, port->base + PCIE_AXI_WINDOW0);
-	
+
 	return 0;
 }
 
@@ -401,7 +378,7 @@ static int airoha_pcie_enable_port(struct airoha_pcie_port *port)
 {
 	int err;
 
-	err = airoha_pcie_start_port(port);
+	err = airoha_pcie_startup_port(port);
 	if (err)
 		airoha_pcie_free_port(port);
 
@@ -413,15 +390,15 @@ static int airoha_pcie_subsys_powerup(struct airoha_pcie *pcie)
 	struct device *dev = pcie->dev;
 	int err;
 
-	pcie->pcie_ck = devm_clk_get(dev, "pcie");
-	if (IS_ERR(pcie->pcie_ck)) {
-		dev_err(dev, "failed to get pcie_ck clock\n");
-		return PTR_ERR(pcie->pcie_ck);
+	pcie->clk = devm_clk_get(dev, "pcie");
+	if (IS_ERR(pcie->clk)) {
+		dev_err(dev, "failed to get pcie clock\n");
+		return PTR_ERR(pcie->clk);
 	}
 
-	err = clk_prepare_enable(pcie->pcie_ck);
+	err = clk_prepare_enable(pcie->clk);
 	if (err) {
-		dev_err(dev, "failed to enable pcie_ck clock\n");
+		dev_err(dev, "failed to enable pcie clock\n");
 		return err;
 	}
 
@@ -435,7 +412,7 @@ static void airoha_pcie_subsys_powerdown(struct airoha_pcie *pcie)
 {
 	struct device *dev = pcie->dev;
 
-	clk_disable_unprepare(pcie->pcie_ck);
+	clk_disable_unprepare(pcie->clk);
 	pm_runtime_put_sync(dev);
 	pm_runtime_disable(dev);
 }
@@ -507,124 +484,6 @@ static int airoha_pcie_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
 	return -EINVAL;
 }
 
-static int airoha_pcie_get_offset(struct airoha_pcie_port *port, u32 bus,
-				  u32 slot)
-{
-	u32 pos, val, devfn = PCI_DEVFN(slot, 0);
-	int err;
-
-	err = airoha_pcie_hw_read_config(port, bus, devfn, PCIE_CLASS, &val);
-	if (err == PCIBIOS_SET_FAILED)
-		return -EINVAL;
-
-	pos = val & 0xff;
-	while (pos && pos != 0xff) {
-		err = airoha_pcie_hw_read_config(port, bus, devfn, pos, &val);
-		if (err == PCIBIOS_SET_FAILED)
-			return -EINVAL;
-
-		if ((val & 0xff) == 0x10)
-			return pos;
-
-		pos = (val >> 0x08) & 0xff;
-	}
-
-	return pos;
-}
-
-static int airoha_pcie_start_training(struct airoha_pcie_port *port)
-{
-	int err, plink_cap_offset, link_cap_offset;
-	u32 devfn = PCI_DEVFN(port->slot, 0);
-	u32 plink_cap, link_cap, plink_sta;
-
-	/* rc0 */
-	plink_cap_offset = airoha_pcie_get_offset(port, 0, port->slot);
-	if (plink_cap_offset < 0)
-		return plink_cap_offset;
-	/* ep0 */
-	link_cap_offset = airoha_pcie_get_offset(port, port->slot + 1, 0);
-	if (link_cap_offset < 0)
-		return link_cap_offset;
-
-	if (plink_cap_offset < 0x40 || link_cap_offset < 0x40)
-		return 0;
-
-	err = airoha_pcie_hw_read_config(port, 0, devfn, plink_cap_offset + 0x0c,
-					 &plink_cap);
-	if (err == PCIBIOS_SET_FAILED)
-		return -EINVAL;
-
-	err = airoha_pcie_hw_read_config(port, port->slot + 1, 0,
-					 link_cap_offset + 0x0c, &link_cap);
-	if (err == PCIBIOS_SET_FAILED)
-		return -EINVAL;
-
-	if ((plink_cap & 0xf) == 0x1 || (link_cap & 0xf) == 0x1)
-		return 0;
-
-	err = airoha_pcie_hw_read_config(port, 0, devfn, plink_cap_offset + 0x10,
-					 &plink_sta);
-	if (err == PCIBIOS_SET_FAILED)
-		return -EINVAL;
-
-	if (((plink_sta >> 16) & 0xf) == (plink_cap & 0xf))
-		return 0;
-
-	return airoha_pcie_hw_write_config(port, 0, devfn,
-					   plink_cap_offset + 0x10,
-					   plink_sta | 0x20);
-}
-
-static void airoha_pcie_fixup_port(struct airoha_pcie_port *port,
-				   struct pci_bus *bus)
-{
-	u32 val, tmp, devfn = PCI_DEVFN(port->slot, 0);
-	int err, i;
-
-	val = readl(port->base + PCIE_LINK_STATUS_V2);
-	if (!(val & PCIE_PORT_LINKUP_V2))
-		return;
-
-	err = airoha_pcie_hw_read_config(port, 0, devfn, PCIE_CFG_ADDR, &val);
-	if (err == PCIBIOS_SET_FAILED)
-		return;
-
-	tmp = (val & GENMASK(15, 0)) << 16;
-	val = (val & GENMASK(31, 16)) + BIT(20);
-	val -= tmp;
-	for (i = 0; i < 32; i++)
-		if (val <= BIT(i))
-			break;
-
-	writel(tmp | i, port->base + PCIE_AHB_TRANS_BASE0_L);
-	usleep_range(1000, 2000);
-	writel(WIN_ENABLE, port->base + PCIE_AXI_WINDOW0);
-
-	airoha_pcie_start_training(port);
-
-	if (IS_ENABLED(CONFIG_PCI_MSI)) {
-		phys_addr_t msg_addr = virt_to_phys(port->base +
-						    PCIE_MSI_VECTOR);
-
-		/* MSI RC */
-		/* FIXME: where is pcie_write_config_word defined? */
-		devfn = PCI_DEVFN(0, port->slot);
-		pci_bus_write_config_dword(bus, devfn, 0x50, 0x817005);
-		pci_bus_write_config_dword(bus, devfn, 0x54,
-					   lower_32_bits(msg_addr));
-		pci_bus_write_config_dword(bus, devfn, 0x5c, 0);
-
-		/* MSI EP */
-		devfn = PCI_DEVFN(port->slot + 1, 0);
-		pci_bus_write_config_dword(bus, devfn, 0xd0, 0x81e005);
-		pci_bus_write_config_dword(bus, devfn, 0xd4,
-					   lower_32_bits(msg_addr));
-		pci_bus_write_config_dword(bus, devfn, 0xdc, 0);
-
-	}
-}
-
 static void airoha_pcie_release_resources(struct airoha_pcie *pcie)
 {
 	struct airoha_pcie_port *port, *tmp;
@@ -636,7 +495,6 @@ static void airoha_pcie_release_resources(struct airoha_pcie *pcie)
 
 static int airoha_pcie_probe(struct platform_device *pdev)
 {
-	struct airoha_pcie_port *port, *tmp;
 	struct device *dev = &pdev->dev;
 	struct pci_host_bridge *host;
 	struct airoha_pcie *pcie;
@@ -662,15 +520,10 @@ static int airoha_pcie_probe(struct platform_device *pdev)
 	host->msi_domain = true;
 
 	err = pci_host_probe(host);
-	if (err) {
+	if (err)
 		airoha_pcie_release_resources(pcie);
-		return err;
-	}
 
-	list_for_each_entry_safe(port, tmp, &pcie->ports, list)
-		airoha_pcie_fixup_port(port, host->bus);
-
-	return 0;
+	return err;
 }
 
 static void airoha_pcie_remove(struct platform_device *pdev)
