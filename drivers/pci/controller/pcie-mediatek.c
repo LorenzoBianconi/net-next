@@ -932,8 +932,15 @@ static int mtk_pcie_parse_port(struct mtk_pcie *pcie,
 	snprintf(name, sizeof(name), "sys_ck%d", slot);
 	port->sys_ck = devm_clk_get(dev, name);
 	if (IS_ERR(port->sys_ck)) {
-		dev_err(dev, "failed to get sys_ck%d clock\n", slot);
-		return PTR_ERR(port->sys_ck);
+		/*
+		 * airoha en7523 runs a single sys clk shared between
+		 * both pcie ports.
+		 */
+		port->sys_ck = devm_clk_get(dev, "sys_ck");
+		if (IS_ERR(port->sys_ck)) {
+			dev_err(dev, "failed to get sys_ck\n");
+			return PTR_ERR(port->sys_ck);
+		}
 	}
 
 	/* sys_ck might be divided into the following parts in some chips */
