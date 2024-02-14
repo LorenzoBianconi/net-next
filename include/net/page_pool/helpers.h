@@ -79,6 +79,18 @@ static inline u64 *page_pool_ethtool_stats_get(u64 *data, void *stats)
 }
 #endif
 
+#ifdef CONFIG_PAGE_POOL
+/**
+ * page_pool_create() - create a page pool
+ * @params: parameters, see struct page_pool_params
+ */
+static inline struct page_pool *
+page_pool_create(const struct page_pool_params *params)
+{
+	return page_pool_create_percpu(params, -1);
+}
+#endif
+
 /**
  * page_pool_dev_alloc_pages() - allocate a page.
  * @pool:	pool from which to allocate

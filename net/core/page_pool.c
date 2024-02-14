@@ -301,16 +301,6 @@ err_free:
 }
 EXPORT_SYMBOL(page_pool_create_percpu);
 
-/**
- * page_pool_create() - create a page pool
- * @params: parameters, see struct page_pool_params
- */
-struct page_pool *page_pool_create(const struct page_pool_params *params)
-{
-	return page_pool_create_percpu(params, -1);
-}
-EXPORT_SYMBOL(page_pool_create);
-
 static void page_pool_return_page(struct page_pool *pool, struct page *page);
 
 noinline
