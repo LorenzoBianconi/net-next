@@ -30,6 +30,7 @@ properties:
   compatible:
     items:
       - const: airoha,en7523-scu
+      - const: airoha,en7581-scu
 
   reg:
     maxItems: 2
