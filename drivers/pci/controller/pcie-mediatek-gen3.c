@@ -7,6 +7,7 @@
  */
 
 #include <linux/clk.h>
+#include <linux/clk-provider.h>
 #include <linux/delay.h>
 #include <linux/iopoll.h>
 #include <linux/irq.h>
@@ -21,6 +22,8 @@
 #include <linux/pm_domain.h>
 #include <linux/pm_runtime.h>
 #include <linux/reset.h>
+#include <linux/of_pci.h>
+#include <linux/of_device.h>
 
 #include "../pci.h"
 
@@ -29,6 +32,7 @@
 #define PCI_CLASS(class)		(class << 8)
 #define PCIE_RC_MODE			BIT(0)
 
+#define PCIE_EQ_PRESET_01_REF		0x100
 #define PCIE_CFGNUM_REG			0x140
 #define PCIE_CFG_DEVFN(devfn)		((devfn) & GENMASK(7, 0))
 #define PCIE_CFG_BUS(bus)		(((bus) << 8) & GENMASK(15, 8))
@@ -68,6 +72,7 @@
 #define PCIE_MSI_SET_ENABLE_REG		0x190
 #define PCIE_MSI_SET_ENABLE		GENMASK(PCIE_MSI_SET_NUM - 1, 0)
 
+#define PCIE_PIPE4_PIE8_REG		0x338
 #define PCIE_MSI_SET_BASE_REG		0xc00
 #define PCIE_MSI_SET_OFFSET		0x10
 #define PCIE_MSI_SET_STATUS_OFFSET	0x04
@@ -100,6 +105,8 @@
 #define PCIE_ATR_TLP_TYPE_MEM		PCIE_ATR_TLP_TYPE(0)
 #define PCIE_ATR_TLP_TYPE_IO		PCIE_ATR_TLP_TYPE(2)
 
+struct mtk_gen3_pcie;
+
 /**
  * struct mtk_msi_set - MSI information for each set
  * @base: IO mapped register base
@@ -113,6 +120,14 @@ struct mtk_msi_set {
 };
 
 /**
+ * struct mtk_pcie_soc_ops - SoC APIs.
+ * @power_up: SoC power up routine
+ */
+struct mtk_pcie_soc_ops {
+	int (*power_up)(struct mtk_gen3_pcie *pcie);
+};
+
+/**
  * struct mtk_gen3_pcie - PCIe port information
  * @dev: pointer to PCIe device
  * @base: IO mapped register base
@@ -122,6 +137,7 @@ struct mtk_msi_set {
  * @phy: PHY controller block
  * @clks: PCIe clocks
  * @num_clks: PCIe clocks count for this port
+ * @soc_ops: PCIe SoC APIs
  * @irq: PCIe controller interrupt number
  * @saved_irq_state: IRQ enable state saved at suspend time
  * @irq_lock: lock protecting IRQ register access
@@ -141,6 +157,7 @@ struct mtk_gen3_pcie {
 	struct phy *phy;
 	struct clk_bulk_data *clks;
 	int num_clks;
+	const struct mtk_pcie_soc_ops *soc_ops;
 
 	int irq;
 	u32 saved_irq_state;
@@ -874,6 +891,72 @@ err_phy_init:
 	return err;
 }
 
+static int mtk_pcie_en7581_power_up(struct mtk_gen3_pcie *pcie)
+{
+	struct device *dev = pcie->dev;
+	int err;
+
+	writel_relaxed(0x23020133, pcie->base + 0x10044);
+	if (!__clk_is_enabled(pcie->clks[0].clk)) {
+		writel_relaxed(0x50500032, pcie->base + 0x15030);
+		writel_relaxed(0x50500032, pcie->base + 0x15130);
+	}
+
+	/* PHY power on and enable pipe clock */
+	reset_control_deassert(pcie->phy_reset);
+
+	err = phy_init(pcie->phy);
+	if (err) {
+		dev_err(dev, "failed to initialize PHY\n");
+		goto err_phy_init;
+	}
+	mdelay(30);
+
+	err = phy_power_on(pcie->phy);
+	if (err) {
+		dev_err(dev, "failed to power on PHY\n");
+		goto err_phy_on;
+	}
+
+	/* MAC power on and enable transaction layer clocks */
+	reset_control_deassert(pcie->mac_reset);
+
+	pm_runtime_enable(dev);
+	pm_runtime_get_sync(dev);
+
+	err = clk_bulk_prepare(pcie->num_clks, pcie->clks);
+	if (err) {
+		dev_err(dev, "failed to prepare clock\n");
+		goto err_clk_prepare;
+	}
+
+	writel_relaxed(0x41474147, pcie->base + PCIE_EQ_PRESET_01_REF);
+	writel_relaxed(0x1018020F, pcie->base + PCIE_PIPE4_PIE8_REG);
+	mdelay(10);
+
+	err = clk_bulk_enable(pcie->num_clks, pcie->clks);
+	if (err) {
+		dev_err(dev, "failed to prepare clock\n");
+		goto err_clk_enable;
+	}
+
+	return 0;
+
+err_clk_enable:
+	clk_bulk_unprepare(pcie->num_clks, pcie->clks);
+err_clk_prepare:
+	pm_runtime_put_sync(dev);
+	pm_runtime_disable(dev);
+	reset_control_assert(pcie->mac_reset);
+	phy_power_off(pcie->phy);
+err_phy_on:
+	phy_exit(pcie->phy);
+err_phy_init:
+	reset_control_assert(pcie->phy_reset);
+
+	return err;
+}
+
 static void mtk_pcie_power_down(struct mtk_gen3_pcie *pcie)
 {
 	clk_bulk_disable_unprepare(pcie->num_clks, pcie->clks);
@@ -904,7 +987,7 @@ static int mtk_pcie_setup(struct mtk_gen3_pcie *pcie)
 	usleep_range(10, 20);
 
 	/* Don't touch the hardware registers before power up */
-	err = mtk_pcie_power_up(pcie);
+	err = pcie->soc_ops->power_up(pcie);
 	if (err)
 		return err;
 
@@ -938,6 +1021,7 @@ static int mtk_pcie_probe(struct platform_device *pdev)
 
 	pcie = pci_host_bridge_priv(host);
 
+	pcie->soc_ops = of_device_get_match_data(dev);
 	pcie->dev = dev;
 	platform_set_drvdata(pdev, pcie);
 
@@ -1054,7 +1138,7 @@ static int mtk_pcie_resume_noirq(struct device *dev)
 	struct mtk_gen3_pcie *pcie = dev_get_drvdata(dev);
 	int err;
 
-	err = mtk_pcie_power_up(pcie);
+	err = pcie->soc_ops->power_up(pcie);
 	if (err)
 		return err;
 
@@ -1074,8 +1158,17 @@ static const struct dev_pm_ops mtk_pcie_pm_ops = {
 				  mtk_pcie_resume_noirq)
 };
 
+static const struct mtk_pcie_soc_ops mtk_8192_pcie_soc_ops = {
+	.power_up = mtk_pcie_power_up,
+};
+
+static const struct mtk_pcie_soc_ops airoha_7581_pcie_soc_ops = {
+	.power_up = mtk_pcie_en7581_power_up,
+};
+
 static const struct of_device_id mtk_pcie_of_match[] = {
-	{ .compatible = "mediatek,mt8192-pcie" },
+	{ .compatible = "mediatek,mt8192-pcie", .data = &mtk_8192_pcie_soc_ops    },
+	{ .compatible = "airoha,en7581-pcie",   .data = &airoha_7581_pcie_soc_ops },
 	{},
 };
 MODULE_DEVICE_TABLE(of, mtk_pcie_of_match);
