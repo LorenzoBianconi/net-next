@@ -549,6 +549,10 @@
 
 #define REG_DBG_CNTMEM_EN		0x0600
 #define DBG_CNTRMEM_EN_MASK		BIT(31)
+
+#define REG_SDN_CNTR_CFG		0x0800
+#define SDN_CNTR_EN			BIT(31)
+#define SDN_CNTR_CPU_RX_EN		BIT(3)
 #define REG_TXQ_DIS_CFG_BASE(_n)	((_n) ? 0x20a0 : 0x00a0)
 #define REG_TXQ_DIS_CFG(_n, _m)		(REG_TXQ_DIS_CFG_BASE((_n)) + (_m) << 2)
 
@@ -815,6 +819,17 @@ enum trtcm_param {
 
 #define TRTCM_TOKEN_RATE_MASK			GENMASK(23, 6)
 #define TRTCM_TOKEN_RATE_FRACTION_MASK		GENMASK(5, 0)
+
+#define SDN_CNTR_PARAM_CFG_RW_MASK		BIT(31)
+#define SDN_CNTR_PARAM_CFG_RW_DONE_MASK		BIT(30)
+#define SDN_CNTR_PARAM_CMD_TYPE_MASK		GENMASK(18, 17)
+#define SDN_CNTR_PARAM_PKTCNTSEL_MASK		BIT(16)
+#define SDN_CNTR_PARAM_TABLE_IDX_MASK		GENMASK(15, 0)
+
+enum {
+	SDN_CNTR_PARAM_SEL_BYTE,
+	SDN_CNTR_PARAM_SEL_PKT,
+};
 
 struct airoha_queue_entry {
 	union {
@@ -2105,6 +2120,51 @@ static int airoha_qdma_init_rx_meter(struct airoha_qdma *qdma)
 	return 0;
 }
 
+static int airoha_qdma_clear_flow_counter(struct airoha_qdma *qdma, int group,
+					  int mode, int index)
+{
+	u32 val = SDN_CNTR_PARAM_CFG_RW_MASK |
+		  FIELD_PREP(SDN_CNTR_PARAM_PKTCNTSEL_MASK, mode) |
+		  FIELD_PREP(SDN_CNTR_PARAM_TABLE_IDX_MASK, index) |
+		  FIELD_PREP(SDN_CNTR_PARAM_CMD_TYPE_MASK, group);
+
+	airoha_qdma_wr(qdma, REG_SDN_CNTR_CFG + 0x8, 0);
+	airoha_qdma_wr(qdma, REG_SDN_CNTR_CFG + 0xc, 0);
+	airoha_qdma_wr(qdma, REG_SDN_CNTR_CFG + 0x4, val);
+
+	return read_poll_timeout(airoha_qdma_rr, val,
+				 val & SDN_CNTR_PARAM_CFG_RW_DONE_MASK,
+				 USEC_PER_MSEC, 10 * USEC_PER_MSEC, true,
+				 qdma, REG_SDN_CNTR_CFG + 0x4);
+}
+
+static int airoha_qdma_init_flow_counter(struct airoha_qdma *qdma)
+{
+	const int flow_count_group_max_idx[] = { 63, 31, 127 };
+	int i;
+
+	airoha_qdma_set(qdma, REG_SDN_CNTR_CFG,
+			SDN_CNTR_EN | SDN_CNTR_CPU_RX_EN);
+
+	for (i = 0; i < ARRAY_SIZE(flow_count_group_max_idx); i++) {
+		int err, index = flow_count_group_max_idx[i];
+
+		err = airoha_qdma_clear_flow_counter(qdma, i,
+						     SDN_CNTR_PARAM_SEL_BYTE,
+						     index);
+		if (err)
+			return err;
+
+		err = airoha_qdma_clear_flow_counter(qdma, i,
+						     SDN_CNTR_PARAM_SEL_PKT,
+						     index);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
 static int airoha_qdma_init_qos(struct airoha_qdma *qdma)
 {
 	int i, err;
@@ -2231,6 +2291,11 @@ static int airoha_qdma_init_qos(struct airoha_qdma *qdma)
 	airoha_qdma_set(qdma, REG_QOS_AGING_CFG,
 			QOS_AGING_EN_MASK | QOS_AGING_FAST_REPLACE_MASK);
 	airoha_qdma_clear(qdma, REG_QOS_AGING_CFG, QOS_AGING_METHOD_MASK);
+
+	err = airoha_qdma_init_flow_counter(qdma);
+	if (err)
+		return err;
+
 	airoha_qdma_clear(qdma, REG_HQOS_MODE_CFG, HQOS_MODE_EN_MASK);
 	airoha_qdma_set(qdma, REG_TXQ_CNGST_NOBLOCKING_CFG,
 			TXQ_CNGST_NOBLOCKING_EN_MASK(7));
