@@ -553,6 +553,12 @@
 #define REG_SDN_CNTR_CFG		0x0800
 #define SDN_CNTR_EN			BIT(31)
 #define SDN_CNTR_CPU_RX_EN		BIT(3)
+
+#define REG_MULTICAST_FPORT(_n)		(0x0880 + ((_n) << 2))
+#define MULTICAST_SPTAG_KEEP_HI_EN_MASK	BIT(31)
+#define MULTICAST_FPORT_CFG_MASK	GENMASK(24, 16)
+#define MULTICAST_STAG_CFG_MASK		GENMASK(15, 0)
+
 #define REG_TXQ_DIS_CFG_BASE(_n)	((_n) ? 0x20a0 : 0x00a0)
 #define REG_TXQ_DIS_CFG(_n, _m)		(REG_TXQ_DIS_CFG_BASE((_n)) + (_m) << 2)
 
@@ -2165,6 +2171,38 @@ static int airoha_qdma_init_flow_counter(struct airoha_qdma *qdma)
 	return 0;
 }
 
+static void airoha_qdma_init_multicast(struct airoha_qdma *qdma)
+{
+	const int multicast_fport_map[] = {
+		0x20, 0x21, 0x22, 0x23,
+		0x24, 0x25, 0x00, 0x80,
+		0x60, 0x61, 0x62, 0x63,
+		0x64, 0x65, 0x40, 0xc0,
+	};
+	const int multicast_tag[] = {
+		0x01, 0x02, 0x04, 0x08,
+		0x10, 0x20, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+	};
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(multicast_fport_map); i++)
+		airoha_qdma_rmw(qdma, REG_MULTICAST_FPORT(i),
+				MULTICAST_FPORT_CFG_MASK,
+				FIELD_PREP(MULTICAST_FPORT_CFG_MASK,
+					   multicast_fport_map[i]));
+	for (i = 0; i < ARRAY_SIZE(multicast_tag); i++) {
+		u32 val = multicast_tag[i];
+
+		airoha_qdma_rmw(qdma, REG_MULTICAST_FPORT(i),
+				MULTICAST_SPTAG_KEEP_HI_EN_MASK |
+				MULTICAST_STAG_CFG_MASK,
+				MULTICAST_SPTAG_KEEP_HI_EN_MASK * !!val |
+				FIELD_PREP(MULTICAST_STAG_CFG_MASK, val));
+	}
+}
+
 static int airoha_qdma_init_qos(struct airoha_qdma *qdma)
 {
 	int i, err;
@@ -2296,6 +2334,7 @@ static int airoha_qdma_init_qos(struct airoha_qdma *qdma)
 	if (err)
 		return err;
 
+	airoha_qdma_init_multicast(qdma);
 	airoha_qdma_clear(qdma, REG_HQOS_MODE_CFG, HQOS_MODE_EN_MASK);
 	airoha_qdma_set(qdma, REG_TXQ_CNGST_NOBLOCKING_CFG,
 			TXQ_CNGST_NOBLOCKING_EN_MASK(7));
