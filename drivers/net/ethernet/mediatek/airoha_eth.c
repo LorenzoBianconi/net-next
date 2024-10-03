@@ -15,6 +15,7 @@
 #include <linux/u64_stats_sync.h>
 #include <net/dsa.h>
 #include <net/page_pool/helpers.h>
+#include <net/pkt_cls.h>
 #include <uapi/linux/ppp_defs.h>
 
 #define AIROHA_MAX_NUM_GDM_PORTS	1
@@ -603,6 +604,13 @@
 #define TWRR_WEIGHT_SCALE_MASK		BIT(31)
 #define TWRR_WEIGHT_BASE_MASK		BIT(3)
 
+#define REG_TXWRR_WEIGHT_CFG		0x1024
+#define TWRR_RW_CMD_MASK		BIT(31)
+#define TWRR_RW_CMD_DONE		BIT(30)
+#define TWRR_CHAN_IDX_MASK		GENMASK(23, 19)
+#define TWRR_QUEUE_IDX_MASK		GENMASK(18, 16)
+#define TWRR_VALUE_MASK			GENMASK(15, 0)
+
 #define REG_PSE_BUF_USAGE_CFG		0x1028
 #define PSE_BUF_ESTIMATE_EN_MASK	BIT(29)
 
@@ -610,7 +618,9 @@
 #define TXQ_CNGST_NOBLOCKING_EN_MASK(_n)	BIT(_n)
 
 #define REG_TXQ_CNGST_CHANNEL_NOBLOCKING_CFG	0x1030
-#define REG_CHAN_QOS_MODE(_n)			(0x1030 + (_n) << 2)
+
+#define REG_CHAN_QOS_MODE(_n)		(0x1040 + ((_n) << 2))
+#define CHAN_QOS_MODE_MASK(_n)		GENMASK(2 + ((_n) << 2), (_n) << 2)
 
 #define REG_GLB_TRTCM_CFG		0x1080
 #define GLB_TRTCM_EN_MASK		BIT(31)
@@ -835,6 +845,11 @@ enum trtcm_param {
 enum {
 	SDN_CNTR_PARAM_SEL_BYTE,
 	SDN_CNTR_PARAM_SEL_PKT,
+};
+
+enum tx_sched_mode {
+	TC_SCH_WRR,
+	TC_SCH_SP,
 };
 
 struct airoha_queue_entry {
@@ -2805,16 +2820,18 @@ static netdev_tx_t airoha_dev_xmit(struct sk_buff *skb,
 {
 	struct skb_shared_info *sinfo = skb_shinfo(skb);
 	struct airoha_gdm_port *port = netdev_priv(dev);
-	u32 msg0 = 0, msg1, len = skb_headlen(skb);
+	u16 index, queue = skb_get_queue_mapping(skb);
 	int i, qid = skb_get_queue_mapping(skb);
+	u32 msg0, msg1, len = skb_headlen(skb);
 	struct airoha_qdma *qdma = port->qdma;
 	u32 nr_frags = 1 + sinfo->nr_frags;
 	struct netdev_queue *txq;
 	struct airoha_queue *q;
 	void *data = skb->data;
-	u16 index;
 	u8 fport;
 
+	msg0 = FIELD_PREP(QDMA_ETH_TXMSG_CHAN_MASK, port->id) |
+	       FIELD_PREP(QDMA_ETH_TXMSG_QUEUE_MASK, queue);
 	if (skb->ip_summed == CHECKSUM_PARTIAL)
 		msg0 |= FIELD_PREP(QDMA_ETH_TXMSG_TCO_MASK, 1) |
 			FIELD_PREP(QDMA_ETH_TXMSG_UCO_MASK, 1) |
@@ -2981,6 +2998,66 @@ airoha_ethtool_get_rmon_stats(struct net_device *dev,
 	} while (u64_stats_fetch_retry(&port->stats.syncp, start));
 }
 
+static int airoha_qdma_set_tx_sched(struct airoha_gdm_port *port,
+				    enum tx_sched_mode mode,
+				    const u16 *weights, u8 n_weights)
+{
+	int i;
+
+	for (i = 0; i < n_weights; i++) {
+		u32 status;
+		int err;
+
+		airoha_qdma_wr(port->qdma, REG_TXWRR_WEIGHT_CFG,
+			       TWRR_RW_CMD_MASK |
+			       FIELD_PREP(TWRR_CHAN_IDX_MASK, port->id) |
+			       FIELD_PREP(TWRR_QUEUE_IDX_MASK, i) |
+			       FIELD_PREP(TWRR_VALUE_MASK, weights[i]));
+		err = read_poll_timeout(airoha_qdma_rr, status,
+					status & TWRR_RW_CMD_DONE,
+					USEC_PER_MSEC, 10 * USEC_PER_MSEC,
+					true, port->qdma,
+					REG_TXWRR_WEIGHT_CFG);
+		if (err)
+			return err;
+	}
+
+	airoha_qdma_rmw(port->qdma, REG_CHAN_QOS_MODE(port->id >> 3),
+			CHAN_QOS_MODE_MASK(port->id),
+			mode << __ffs(CHAN_QOS_MODE_MASK(port->id)));
+
+	return 0;
+}
+
+static int airoha_tc_setup_qdisc_taprio(struct airoha_gdm_port *port,
+					struct tc_prio_qopt_offload *opt)
+{
+	if (opt->command == TC_PRIO_REPLACE) {
+		static const u16 w[AIROHA_NUM_TX_RING] = {};
+
+		if (opt->replace_params.bands > ARRAY_SIZE(w))
+			return -EINVAL;
+
+		return airoha_qdma_set_tx_sched(port, TC_SCH_SP, w,
+						ARRAY_SIZE(w));
+	}
+
+	return 0;
+}
+
+static int airoha_tc_setup(struct net_device *dev, enum tc_setup_type type,
+			   void *type_data)
+{
+	struct airoha_gdm_port *port = netdev_priv(dev);
+
+	switch (type) {
+	case TC_SETUP_QDISC_PRIO:
+		return airoha_tc_setup_qdisc_taprio(port, type_data);
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
 static const struct net_device_ops airoha_netdev_ops = {
 	.ndo_init		= airoha_dev_init,
 	.ndo_open		= airoha_dev_open,
@@ -2988,6 +3065,7 @@ static const struct net_device_ops airoha_netdev_ops = {
 	.ndo_start_xmit		= airoha_dev_xmit,
 	.ndo_get_stats64        = airoha_dev_get_stats64,
 	.ndo_set_mac_address	= airoha_dev_set_macaddr,
+	.ndo_setup_tc		= airoha_tc_setup,
 };
 
 static const struct ethtool_ops airoha_ethtool_ops = {
@@ -3037,7 +3115,8 @@ static int airoha_alloc_gdm_port(struct airoha_eth *eth, struct device_node *np)
 	dev->watchdog_timeo = 5 * HZ;
 	dev->hw_features = NETIF_F_IP_CSUM | NETIF_F_RXCSUM |
 			   NETIF_F_TSO6 | NETIF_F_IPV6_CSUM |
-			   NETIF_F_SG | NETIF_F_TSO;
+			   NETIF_F_SG | NETIF_F_TSO |
+			   NETIF_F_HW_TC;
 	dev->features |= dev->hw_features;
 	dev->dev.of_node = np;
 	dev->irq = qdma->irq;
