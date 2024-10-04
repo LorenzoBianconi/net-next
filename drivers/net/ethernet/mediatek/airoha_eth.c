@@ -23,8 +23,8 @@
 #define AIROHA_MAX_NUM_XSI_RSTS		5
 #define AIROHA_MAX_MTU			2000
 #define AIROHA_MAX_PACKET_SIZE		2048
-#define AIROHA_NUM_TX_RING		32
-#define AIROHA_NUM_RX_RING		32
+#define AIROHA_NUM_TX_RING		8
+#define AIROHA_NUM_DMA_RING		32
 #define AIROHA_FE_MC_MAX_VLAN_TABLE	64
 #define AIROHA_FE_MC_MAX_VLAN_PORT	16
 #define AIROHA_NUM_TX_IRQ		2
@@ -796,8 +796,8 @@ struct airoha_qdma {
 
 	struct airoha_tx_irq_queue q_tx_irq[AIROHA_NUM_TX_IRQ];
 
-	struct airoha_queue q_tx[AIROHA_NUM_TX_RING];
-	struct airoha_queue q_rx[AIROHA_NUM_RX_RING];
+	struct airoha_queue q_tx[AIROHA_NUM_DMA_RING];
+	struct airoha_queue q_rx[AIROHA_NUM_DMA_RING];
 
 	/* descriptor and packet buffers for qdma hw forward */
 	struct {
@@ -2627,7 +2627,7 @@ static int airoha_alloc_gdm_port(struct airoha_eth *eth, struct device_node *np)
 	}
 
 	dev = devm_alloc_etherdev_mqs(eth->dev, sizeof(*port),
-				      AIROHA_NUM_TX_RING, AIROHA_NUM_RX_RING);
+				      AIROHA_NUM_TX_RING, AIROHA_NUM_DMA_RING);
 	if (!dev) {
 		dev_err(eth->dev, "alloc_etherdev failed\n");
 		return -ENOMEM;
