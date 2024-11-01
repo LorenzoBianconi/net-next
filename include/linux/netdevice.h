@@ -1170,6 +1170,14 @@ struct netdev_net_notifier {
  *	This is always called from the stack with the rtnl lock held and netif
  *	tx queues stopped. This allows the netdevice to perform queue
  *	management safely.
+ * int (*ndo_setup_tc_conduit)(struct net_device *dev, int user_port,
+ *			       enum tc_setup_type type, void *type_data);
+*	Called to etup any 'tc' scheduler, classifier or action on the user
+*	port @user_port via the conduit port @dev. This is useful if the hw
+*	supports improved offloading capability through the conduit port.
+*	This is always called from the stack with the rtnl lock held and netif
+*	tx queues stopped. This allows the netdevice to perform queue
+*	management safely.
  *
  *	Fiber Channel over Ethernet (FCoE) offload functions.
  * int (*ndo_fcoe_enable)(struct net_device *dev);
@@ -1476,6 +1484,10 @@ struct net_device_ops {
 	int			(*ndo_setup_tc)(struct net_device *dev,
 						enum tc_setup_type type,
 						void *type_data);
+	int			(*ndo_setup_tc_conduit)(struct net_device *dev,
+							int user_port,
+							enum tc_setup_type type,
+							void *type_data);
 #if IS_ENABLED(CONFIG_FCOE)
 	int			(*ndo_fcoe_enable)(struct net_device *dev);
 	int			(*ndo_fcoe_disable)(struct net_device *dev);
