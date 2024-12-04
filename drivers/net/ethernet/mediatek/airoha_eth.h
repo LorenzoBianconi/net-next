@@ -11,8 +11,13 @@
 #include <linux/iopoll.h>
 #include <linux/kernel.h>
 #include <linux/netdevice.h>
+#include <linux/of.h>
+#include <linux/of_net.h>
+#include <linux/of_platform.h>
+#include <linux/platform_device.h>
 #include <linux/reset.h>
 
+#define AIROHA_NPU_NUM_CORES		8
 #define AIROHA_MAX_NUM_GDM_PORTS	4
 #define AIROHA_MAX_NUM_QDMA		2
 #define AIROHA_MAX_DSA_PORTS		7
@@ -43,6 +48,14 @@
 
 #define QDMA_METER_IDX(_n)		((_n) & 0xff)
 #define QDMA_METER_GROUP(_n)		(((_n) >> 8) & 0x3)
+
+#define PPE_NUM				2
+#define PPE_SRAM_NUM_ENTRIES		(16 * 1024)
+#define PPE1_SRAM_NUM_ENTRIES		(8 * 1024)
+#define PPE_DRAM_NUM_ENTRIES		(16 * 1024)
+#define PPE_NUM_ENTRIES			(PPE_SRAM_NUM_ENTRIES + PPE_DRAM_NUM_ENTRIES)
+#define PPE_HASH_MASK			(PPE_NUM_ENTRIES - 1)
+#define PPE_ENTRY_SIZE			80
 
 #define MTK_HDR_LEN			4
 #define MTK_HDR_XMIT_TAGGED_TPID_8100	1
@@ -127,6 +140,46 @@ enum trtcm_param {
 	TRTCM_METER_MODE = BIT(2),
 };
 
+enum {
+	NPU_OP_SET = 1,
+	NPU_OP_SET_NO_WAIT,
+	NPU_OP_GET,
+	NPU_OP_GET_NO_WAIT,
+};
+
+enum {
+	NPU_FUNC_WIFI,
+	NPU_FUNC_TUNNEL,
+	NPU_FUNC_NOTIFY,
+	NPU_FUNC_DBA,
+	NPU_FUNC_TR471,
+	NPU_FUNC_PPE,
+};
+
+enum {
+	NPU_MBOX_ERROR,
+	NPU_MBOX_SUCCESS,
+};
+
+enum {
+	PPE_FUNC_SET_WAIT,
+	PPE_FUNC_SET_WAIT_HWNAT_INIT,
+	PPE_FUNC_SET_WAIT_HWNAT_DEINIT,
+	PPE_FUNC_SET_WAIT_API,
+};
+
+enum {
+	PPE2_SRAM_SET_ENTRY,
+	PPE_SRAM_SET_ENTRY,
+	PPE_SRAM_SET_VAL,
+	PPE_SRAM_RESET_VAL,
+};
+
+enum {
+	QDMA_WAN_ETHER = 1,
+	QDMA_WAN_PON_XDSL,
+};
+
 #define MIN_TOKEN_SIZE				4096
 #define MAX_TOKEN_SIZE_OFFSET			17
 #define TRTCM_TOKEN_RATE_MASK			GENMASK(23, 6)
@@ -195,6 +248,48 @@ struct airoha_hw_stats {
 	u64 rx_len[7];
 };
 
+struct npu_mbox_metadata {
+	union {
+		struct {
+			u16 wait_rsp:1;
+			u16 done:1;
+			u16 status:3;
+			u16 static_buf:1;
+			u16 rsv:5;
+			u16 func_id:4;
+		};
+		u16 data;
+	};
+};
+
+#define PPE_TYPE_L2B_IPV4	2
+#define PPE_TYPE_L2B_IPV4_IPV6	3
+
+struct ppe_mbox_data {
+	u32 func_type;
+	u32 func_id;
+	union {
+		struct {
+			u8 cds;
+			u8 xpon_hal_api;
+			u8 wan_xsi;
+			u8 ct_joyme4;
+			int ppe_type;
+			int wan_mode;
+			int wan_sel;
+		} init_info;
+		struct {
+			int func_id;
+			u32 size;
+			u32 data;
+		} set_info;
+	};
+};
+
+struct airoha_foe_entry {
+	u8 data[PPE_ENTRY_SIZE];
+};
+
 struct airoha_qdma {
 	struct airoha_eth *eth;
 	void __iomem *regs;
@@ -234,11 +329,33 @@ struct airoha_gdm_port {
 	struct metadata_dst *dsa_meta[AIROHA_MAX_DSA_PORTS];
 };
 
+struct airoha_npu {
+	struct platform_device *pdev;
+	struct device_node *np;
+
+	void __iomem *base;
+
+	struct airoha_npu_core {
+		struct airoha_npu *npu;
+		spinlock_t lock;
+	} cores[AIROHA_NPU_NUM_CORES];
+};
+
+struct airoha_ppe {
+	struct airoha_eth *eth;
+
+	void *foe;
+	dma_addr_t foe_dma;
+};
+
 struct airoha_eth {
 	struct device *dev;
 
 	unsigned long state;
 	void __iomem *fe_regs;
+
+	struct airoha_npu *npu;
+	struct airoha_ppe *ppe;
 
 	struct reset_control_bulk_data rsts[AIROHA_MAX_NUM_RSTS];
 	struct reset_control_bulk_data xsi_rsts[AIROHA_MAX_NUM_XSI_RSTS];
@@ -274,5 +391,8 @@ u32 airoha_rmw(void __iomem *base, u32 offset, u32 mask, u32 val);
 	airoha_rmw((qdma)->regs, (offset), 0, (val))
 #define airoha_qdma_clear(qdma, offset, val)			\
 	airoha_rmw((qdma)->regs, (offset), (val), 0)
+
+int airoha_ppe_init(struct airoha_eth *eth);
+void airoha_ppe_deinit(struct airoha_eth *eth);
 
 #endif /* AIROHA_ETH_H */
