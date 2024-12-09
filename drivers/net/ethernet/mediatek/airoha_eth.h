@@ -322,6 +322,7 @@ struct airoha_npu {
 	struct airoha_npu_core {
 		struct airoha_npu *npu;
 		struct mutex mbox_mutex;
+		struct work_struct wdt_work;
 	} cores[AIROHA_NPU_NUM_CORES];
 };
 

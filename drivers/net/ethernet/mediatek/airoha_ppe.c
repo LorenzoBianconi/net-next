@@ -4,6 +4,7 @@
  * Author: Lorenzo Bianconi <lorenzo@kernel.org>
  */
 
+#include <linux/devcoredump.h>
 #include <linux/firmware.h>
 #include <linux/of_reserved_mem.h>
 
@@ -14,8 +15,12 @@
 #define NPU_EN7581_FIRMWARE_RV32		"airoha/en7581_npu_rv32.bin"
 #define NPU_EN7581_FIRMWARE_RV32_MAX_SIZE	0x200000
 #define NPU_EN7581_FIRMWARE_DATA_MAX_SIZE	0x10000
+#define NPU_DUMP_SIZE				512
 
 #define REG_NPU_LOCAL_SRAM		0x0
+
+#define NPU_PC_BASE_ADDR		0x305000
+#define REG_PC_DBG(_n)			(0x305000 + ((_n) * 0x100))
 
 #define NPU_CLUSTER_BASE_ADDR		0x306000
 
@@ -46,6 +51,14 @@ static u32 airoha_npu_rr(struct airoha_npu *npu, u32 reg)
 static void airoha_npu_wr(struct airoha_npu *npu, u32 reg, u32 val)
 {
 	writel(val, npu->base + reg);
+}
+
+static u32 airoha_npu_rmw(struct airoha_npu *npu, u32 reg, u32 mask, u32 val)
+{
+	val |= airoha_npu_rr(npu, reg) & ~mask;
+	airoha_npu_wr(npu, reg, val);
+
+	return val;
 }
 
 static int airoha_npu_send_msg(struct airoha_npu *npu, int func_id,
@@ -205,6 +218,44 @@ static int airoha_npu_flush_ppe_sram_entries(struct airoha_npu *npu,
 				   sizeof(struct ppe_mbox_data));
 }
 
+static void airoha_npu_wdt_work(struct work_struct *work)
+{
+	struct airoha_npu_core *core;
+	struct airoha_npu *npu;
+	void *dump;
+	int c;
+
+	core = container_of(work, struct airoha_npu_core, wdt_work);
+	npu = core->npu;
+
+	dump = vzalloc(NPU_DUMP_SIZE);
+	if (!dump)
+		return;
+
+	c = core - &npu->cores[0];
+	snprintf(dump, NPU_DUMP_SIZE, "PC: %08x SP: %08x LR: %08x\n",
+		 airoha_npu_rr(npu, REG_PC_DBG(c)),
+		 airoha_npu_rr(npu, REG_PC_DBG(c) + 0x4),
+		 airoha_npu_rr(npu, REG_PC_DBG(c) + 0x8));
+
+	dev_coredumpv(&npu->pdev->dev, dump, NPU_DUMP_SIZE, GFP_KERNEL);
+}
+
+static irqreturn_t airoha_npu_wdt_handler(int irq, void *core_instance)
+{
+	struct airoha_npu_core *core = core_instance;
+	struct airoha_npu *npu = core->npu;
+	int c = core - &npu->cores[0];
+	u32 val;
+
+	airoha_npu_rmw(npu, REG_WDT_TIMER_CTRL(c), 0, WDT_INTR_MASK);
+	val = airoha_npu_rr(npu, REG_WDT_TIMER_CTRL(c));
+	if (FIELD_GET(WDT_EN_MASK, val))
+		schedule_work(&core->wdt_work);
+
+	return IRQ_HANDLED;
+}
+
 static struct airoha_npu *airoha_npu_init(struct airoha_eth *eth)
 {
 	struct reserved_mem *rmem;
@@ -256,6 +307,20 @@ static struct airoha_npu *airoha_npu_init(struct airoha_eth *eth)
 
 		mutex_init(&core->mbox_mutex);
 		core->npu = npu;
+
+		irq = platform_get_irq(npu->pdev, i + 1);
+		if (irq < 0) {
+			err = irq;
+			goto error_put_dev;
+		}
+
+		err = devm_request_irq(&npu->pdev->dev, irq,
+				       airoha_npu_wdt_handler, IRQF_SHARED,
+				       "airoha-npu-wdt", core);
+		if (err)
+			goto error_put_dev;
+
+		INIT_WORK(&core->wdt_work, airoha_npu_wdt_work);
 	}
 
 	if (dma_set_coherent_mask(&npu->pdev->dev, 0xbfffffff))
@@ -296,6 +361,11 @@ error_of_node_put:
 
 static void airoha_npu_deinit(struct airoha_npu *npu)
 {
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(npu->cores); i++)
+		cancel_work_sync(&npu->cores[i].wdt_work);
+
 	put_device(&npu->pdev->dev);
 	of_node_put(npu->np);
 }
