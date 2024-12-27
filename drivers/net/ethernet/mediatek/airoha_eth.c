@@ -7,7 +7,6 @@
 #include <linux/u64_stats_sync.h>
 #include <net/dsa.h>
 #include <net/page_pool/helpers.h>
-#include <net/pkt_cls.h>
 #include <uapi/linux/ppp_defs.h>
 
 #include "airoha_regs.h"
@@ -651,6 +650,7 @@ static int airoha_qdma_rx_process(struct airoha_queue *q, int budget)
 	while (done < budget) {
 		struct airoha_queue_entry *e = &q->entry[q->tail];
 		struct airoha_qdma_desc *desc = &q->desc[q->tail];
+		u32 hash, reason, msg1 = le32_to_cpu(desc->msg1);
 		dma_addr_t dma_addr = le32_to_cpu(desc->addr);
 		u32 desc_ctrl = le32_to_cpu(desc->ctrl);
 		struct sk_buff *skb;
@@ -695,6 +695,16 @@ static int airoha_qdma_rx_process(struct airoha_queue *q, int budget)
 		skb->protocol = eth_type_trans(skb, skb->dev);
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 		skb_record_rx_queue(skb, qid);
+
+		hash = FIELD_GET(AIROHA_RXD4_FOE_ENTRY, msg1);
+		if (hash != AIROHA_RXD4_FOE_ENTRY)
+			skb_set_hash(skb, jhash_1word(hash, 0),
+				     PKT_HASH_TYPE_L4);
+
+		reason = FIELD_GET(AIROHA_RXD4_PPE_CPU_REASON, msg1);
+		if (reason == AIROHA_PPE_CPU_REASON_HIT_UNBIND_RATE_REACHED)
+			airoha_ppe_check_skb(eth->ppe, skb, hash);
+
 		napi_gro_receive(&q->napi, skb);
 
 		done++;
@@ -2042,6 +2052,47 @@ static int airoha_tc_setup_qdisc_tbf(struct airoha_gdm_port *port, int channel,
 	}
 }
 
+static int airoha_dev_setup_tc_block(struct airoha_gdm_port *port,
+				     struct flow_block_offload *f)
+{
+	flow_setup_cb_t *cb = airoha_ppe_setup_tc_block_cb;
+	static LIST_HEAD(block_cb_list);
+	struct flow_block_cb *block_cb;
+
+	if (f->binder_type != FLOW_BLOCK_BINDER_TYPE_CLSACT_INGRESS)
+		return -EOPNOTSUPP;
+
+	f->driver_block_list = &block_cb_list;
+	switch (f->command) {
+	case FLOW_BLOCK_BIND:
+		block_cb = flow_block_cb_lookup(f->block, cb, port->dev);
+		if (block_cb) {
+			flow_block_cb_incref(block_cb);
+			return 0;
+		}
+		block_cb = flow_block_cb_alloc(cb, port->dev, port->dev, NULL);
+		if (IS_ERR(block_cb))
+			return PTR_ERR(block_cb);
+
+		flow_block_cb_incref(block_cb);
+		flow_block_cb_add(block_cb, f);
+		list_add_tail(&block_cb->driver_list, &block_cb_list);
+		return 0;
+	case FLOW_BLOCK_UNBIND:
+		block_cb = flow_block_cb_lookup(f->block, cb, port->dev);
+		if (!block_cb)
+			return -ENOENT;
+
+		if (!flow_block_cb_decref(block_cb)) {
+			flow_block_cb_remove(block_cb, f);
+			list_del(&block_cb->driver_list);
+		}
+		return 0;
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
 static int airoha_dev_tc_setup_conduit(struct net_device *dev, int channel,
 				       enum tc_setup_type type,
 				       void *type_data)
@@ -2053,6 +2104,9 @@ static int airoha_dev_tc_setup_conduit(struct net_device *dev, int channel,
 		return airoha_tc_setup_qdisc_ets(port, channel, type_data);
 	case TC_SETUP_QDISC_TBF:
 		return airoha_tc_setup_qdisc_tbf(port, channel, type_data);
+	case TC_SETUP_BLOCK:
+	case TC_SETUP_FT:
+		return airoha_dev_setup_tc_block(port, type_data);
 	default:
 		return -EOPNOTSUPP;
 	}
