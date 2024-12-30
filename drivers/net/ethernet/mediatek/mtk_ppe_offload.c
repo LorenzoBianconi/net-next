@@ -13,37 +13,6 @@
 #include "mtk_eth_soc.h"
 #include "mtk_wed.h"
 
-struct mtk_flow_data {
-	struct ethhdr eth;
-
-	union {
-		struct {
-			__be32 src_addr;
-			__be32 dst_addr;
-		} v4;
-
-		struct {
-			struct in6_addr src_addr;
-			struct in6_addr dst_addr;
-		} v6;
-	};
-
-	__be16 src_port;
-	__be16 dst_port;
-
-	u16 vlan_in;
-
-	struct {
-		u16 id;
-		__be16 proto;
-		u8 num;
-	} vlan;
-	struct {
-		u16 sid;
-		u8 num;
-	} pppoe;
-};
-
 static const struct rhashtable_params mtk_flow_ht_params = {
 	.head_offset = offsetof(struct mtk_flow_entry, node),
 	.key_offset = offsetof(struct mtk_flow_entry, cookie),

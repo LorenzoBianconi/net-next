@@ -307,6 +307,37 @@ struct mtk_flow_entry {
 	unsigned long cookie;
 };
 
+struct mtk_flow_data {
+	struct ethhdr eth;
+
+	union {
+		struct {
+			__be32 src_addr;
+			__be32 dst_addr;
+		} v4;
+
+		struct {
+			struct in6_addr src_addr;
+			struct in6_addr dst_addr;
+		} v6;
+	};
+
+	__be16 src_port;
+	__be16 dst_port;
+
+	u16 vlan_in;
+
+	struct {
+		u16 id;
+		__be16 proto;
+		u8 num;
+	} vlan;
+	struct {
+		u16 sid;
+		u8 num;
+	} pppoe;
+};
+
 struct mtk_mib_entry {
 	u32	byt_cnt_l;
 	u16	byt_cnt_h;
