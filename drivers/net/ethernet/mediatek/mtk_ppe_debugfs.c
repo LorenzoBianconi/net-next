@@ -4,74 +4,7 @@
 #include <linux/kernel.h>
 #include <linux/debugfs.h>
 
-#include <net/ipv6.h>
-
 #include "mtk_eth_soc.h"
-
-struct mtk_flow_addr_info
-{
-	void *src, *dest;
-	u16 *src_port, *dest_port;
-	bool ipv6;
-};
-
-static const char *mtk_foe_entry_state_str(int state)
-{
-	static const char * const state_str[] = {
-		[MTK_FOE_STATE_INVALID] = "INV",
-		[MTK_FOE_STATE_UNBIND] = "UNB",
-		[MTK_FOE_STATE_BIND] = "BND",
-		[MTK_FOE_STATE_FIN] = "FIN",
-	};
-
-	if (state >= ARRAY_SIZE(state_str) || !state_str[state])
-		return "UNK";
-
-	return state_str[state];
-}
-
-static const char *mtk_foe_pkt_type_str(int type)
-{
-	static const char * const type_str[] = {
-		[MTK_PPE_PKT_TYPE_IPV4_HNAPT] = "IPv4 5T",
-		[MTK_PPE_PKT_TYPE_IPV4_ROUTE] = "IPv4 3T",
-		[MTK_PPE_PKT_TYPE_IPV4_DSLITE] = "DS-LITE",
-		[MTK_PPE_PKT_TYPE_IPV6_ROUTE_3T] = "IPv6 3T",
-		[MTK_PPE_PKT_TYPE_IPV6_ROUTE_5T] = "IPv6 5T",
-		[MTK_PPE_PKT_TYPE_IPV6_6RD] = "6RD",
-	};
-
-	if (type >= ARRAY_SIZE(type_str) || !type_str[type])
-		return "UNKNOWN";
-
-	return type_str[type];
-}
-
-static void
-mtk_print_addr(struct seq_file *m, u32 *addr, bool ipv6)
-{
-	__be32 n_addr[IPV6_ADDR_WORDS];
-
-	if (!ipv6) {
-		seq_printf(m, "%pI4h", addr);
-		return;
-	}
-
-	ipv6_addr_cpu_to_be32(n_addr, addr);
-	seq_printf(m, "%pI6", n_addr);
-}
-
-static void
-mtk_print_addr_info(struct seq_file *m, struct mtk_flow_addr_info *ai)
-{
-	mtk_print_addr(m, ai->src, ai->ipv6);
-	if (ai->src_port)
-		seq_printf(m, ":%d", *ai->src_port);
-	seq_printf(m, "->");
-	mtk_print_addr(m, ai->dest, ai->ipv6);
-	if (ai->dest_port)
-		seq_printf(m, ":%d", *ai->dest_port);
-}
 
 static int
 mtk_ppe_debugfs_foe_show(struct seq_file *m, void *private, bool bind)
