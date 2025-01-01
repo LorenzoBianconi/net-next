@@ -4,6 +4,7 @@
  * Author: Lorenzo Bianconi <lorenzo@kernel.org>
  */
 
+#include <linux/debugfs.h>
 #include <linux/devcoredump.h>
 #include <linux/firmware.h>
 #include <linux/ip.h>
@@ -1091,6 +1092,124 @@ void airoha_ppe_check_skb(struct airoha_ppe *ppe, u16 hash)
 	airoha_ppe_foe_insert_entry(ppe, hash);
 }
 
+static int airoha_ppe_debugfs_foe_show(struct seq_file *m, void *private,
+				       bool bind)
+{
+	struct airoha_ppe *ppe = m->private;
+	int i;
+
+	for (i = 0; i < PPE_NUM_ENTRIES; i++) {
+		struct airoha_foe_mac_info_common *l2;
+		unsigned char h_source[ETH_ALEN] = {};
+		struct mtk_flow_addr_info ai = {};
+		unsigned char h_dest[ETH_ALEN];
+		struct airoha_foe_entry *hwe;
+		int type, state;
+		u32 ib2, data;
+
+		hwe = airoha_ppe_foe_get_entry(ppe, i);
+		if (!hwe)
+			continue;
+
+		state = FIELD_GET(MTK_FOE_IB1_STATE, hwe->ib1);
+		if (!state)
+			continue;
+
+		if (bind && state != MTK_FOE_STATE_BIND)
+			continue;
+
+		type = FIELD_GET(MTK_FOE_IB1_PACKET_TYPE, hwe->ib1);
+		seq_printf(m, "%05x %s %7s", i,
+			   mtk_foe_entry_state_str(state),
+			   mtk_foe_pkt_type_str(type));
+
+		switch (type) {
+		case MTK_PPE_PKT_TYPE_IPV4_HNAPT:
+		case MTK_PPE_PKT_TYPE_IPV4_DSLITE:
+			ai.src_port = &hwe->ipv4.orig_tuple.src_port;
+			ai.dest_port = &hwe->ipv4.orig_tuple.dest_port;
+			fallthrough;
+		case MTK_PPE_PKT_TYPE_IPV4_ROUTE:
+			ai.src = &hwe->ipv4.orig_tuple.src_ip;
+			ai.dest = &hwe->ipv4.orig_tuple.dest_ip;
+			break;
+		case MTK_PPE_PKT_TYPE_IPV6_ROUTE_5T:
+			ai.src_port = &hwe->ipv6.src_port;
+			ai.dest_port = &hwe->ipv6.dest_port;
+			fallthrough;
+		case MTK_PPE_PKT_TYPE_IPV6_ROUTE_3T:
+		case MTK_PPE_PKT_TYPE_IPV6_6RD:
+			ai.src = &hwe->ipv6.src_ip;
+			ai.dest = &hwe->ipv6.dest_ip;
+			ai.ipv6 = true;
+			break;
+		}
+
+		seq_printf(m, " orig=");
+		mtk_print_addr_info(m, &ai);
+
+		switch (type) {
+		case MTK_PPE_PKT_TYPE_IPV4_HNAPT:
+		case MTK_PPE_PKT_TYPE_IPV4_DSLITE:
+			ai.src_port = &hwe->ipv4.new_tuple.src_port;
+			ai.dest_port = &hwe->ipv4.new_tuple.dest_port;
+			fallthrough;
+		case MTK_PPE_PKT_TYPE_IPV4_ROUTE:
+			ai.src = &hwe->ipv4.new_tuple.src_ip;
+			ai.dest = &hwe->ipv4.new_tuple.dest_ip;
+			seq_printf(m, " new=");
+			mtk_print_addr_info(m, &ai);
+			break;
+		}
+
+		if (type >= MTK_PPE_PKT_TYPE_IPV6_ROUTE_3T) {
+			data = hwe->ipv6.data;
+			ib2 = hwe->ipv6.ib2;
+			l2 = &hwe->ipv6.l2;
+		} else {
+			data = hwe->ipv4.data;
+			ib2 = hwe->ipv4.ib2;
+			l2 = &hwe->ipv4.l2.common;
+			*((__be16 *)&h_source[4]) =
+				cpu_to_be16(hwe->ipv4.l2.src_mac_lo);
+		}
+
+		*((__be32 *)h_dest) = cpu_to_be32(l2->dest_mac_hi);
+		*((__be16 *)&h_dest[4]) = cpu_to_be16(l2->dest_mac_lo);
+		*((__be32 *)h_source) = cpu_to_be32(l2->src_mac_hi);
+
+		seq_printf(m, " eth=%pM->%pM etype=%04x data=%08x"
+			      " vlan=%d,%d ib1=%08x ib2=%08x\n",
+			   h_source, h_dest, l2->etype, data,
+			   l2->vlan1, l2->vlan2, hwe->ib1, ib2);
+	}
+
+	return 0;
+}
+
+static int airoha_ppe_debugfs_foe_all_show(struct seq_file *m, void *private)
+{
+	return airoha_ppe_debugfs_foe_show(m, private, false);
+}
+DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_foe_all);
+
+static int airoha_ppe_debugfs_foe_bind_show(struct seq_file *m, void *private)
+{
+	return airoha_ppe_debugfs_foe_show(m, private, true);
+}
+DEFINE_SHOW_ATTRIBUTE(airoha_ppe_debugfs_foe_bind);
+
+static int airoha_ppe_debugfs_init(struct airoha_ppe *ppe)
+{
+	ppe->debugfs_dir = debugfs_create_dir("ppe", NULL);
+	debugfs_create_file("entries", S_IRUGO, ppe->debugfs_dir, ppe,
+			    &airoha_ppe_debugfs_foe_all_fops);
+	debugfs_create_file("bind", S_IRUGO, ppe->debugfs_dir, ppe,
+			    &airoha_ppe_debugfs_foe_bind_fops);
+
+	return 0;
+}
+
 static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
 {
 	struct airoha_eth *eth = ppe->eth;
@@ -1201,6 +1320,10 @@ int airoha_ppe_init(struct airoha_eth *eth)
 	if (err)
 		goto error_npu_deinit;
 
+	err = airoha_ppe_debugfs_init(ppe);
+	if (err)
+		goto error_npu_deinit;
+
 	return 0;
 
 error_npu_deinit:
@@ -1219,4 +1342,5 @@ void airoha_ppe_deinit(struct airoha_eth *eth)
 		airoha_npu_deinit(eth->npu);
 	}
 	rhashtable_destroy(&eth->flow_table);
+	debugfs_remove(eth->ppe->debugfs_dir);
 }
