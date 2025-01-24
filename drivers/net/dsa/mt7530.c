@@ -3198,6 +3198,21 @@ static int mt7988_setup(struct dsa_switch *ds)
 	return mt7531_setup_common(ds);
 }
 
+static int en7581_setup(struct dsa_switch *ds)
+{
+	struct mt7530_priv *priv = ds->priv;
+	int err;
+
+	err = mt7988_setup(ds);
+	if (err)
+		return err;
+
+	mt7530_write(priv, MT753X_CPORT_SPTAG_CFG,
+		     CPORT_SW2FE_STAG_EN | CPORT_FE2SW_STAG_EN);
+
+	return 0;
+}
+
 const struct dsa_switch_ops mt7530_switch_ops = {
 	.get_tag_protocol	= mtk_get_tag_protocol,
 	.setup			= mt753x_setup,
@@ -3287,7 +3302,7 @@ const struct mt753x_info mt753x_table[] = {
 	[ID_EN7581] = {
 		.id = ID_EN7581,
 		.pcs_ops = &mt7530_pcs_ops,
-		.sw_setup = mt7988_setup,
+		.sw_setup = en7581_setup,
 		.phy_read_c22 = mt7531_ind_c22_phy_read,
 		.phy_write_c22 = mt7531_ind_c22_phy_write,
 		.phy_read_c45 = mt7531_ind_c45_phy_read,
