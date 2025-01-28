@@ -217,11 +217,11 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
 					struct airoha_foe_entry *hwe,
 					struct net_device *dev, int type,
 					struct airoha_flow_data *data,
-					int l4proto)
+					int l4proto, u32 priority)
 {
 	int dsa_port = airoha_get_dsa_port(&dev);
+	u32 channel = 0, qdata, ports_pad, val;
 	struct airoha_foe_mac_info_common *l2;
-	u32 qdata, ports_pad, val;
 
 	memset(hwe, 0, sizeof(*hwe));
 
@@ -248,8 +248,11 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
 		if (dsa_port >= 0)
 			pse_port = port->id == 4 ? FE_PSE_PORT_GDM4 : port->id;
 		else
-			pse_port = 2; /* uplink relies on GDM2 loopback */
+			/* uplink relies on GDM2 loopback for GDM3 and GDM4 */
+			pse_port = 2;
 		val |= FIELD_PREP(AIROHA_FOE_IB2_PSE_PORT, pse_port);
+		channel = dsa_port >= 0 ? dsa_port : port->id;
+		channel = channel % AIROHA_NUM_QOS_CHANNELS;
 	}
 
 	if (is_multicast_ether_addr(data->eth.h_dest))
@@ -261,7 +264,10 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
 	if (type == PPE_PKT_TYPE_IPV6_ROUTE_3T)
 		hwe->ipv6.ports = ports_pad;
 
-	qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f);
+	qdata = FIELD_PREP(AIROHA_FOE_CHANNEL, channel) |
+		FIELD_PREP(AIROHA_FOE_QID, priority % AIROHA_NUM_QOS_QUEUES) |
+		FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f);
+
 	if (type == PPE_PKT_TYPE_BRIDGE) {
 		airoha_ppe_foe_set_bridge_addrs(&hwe->bridge, &data->eth);
 		hwe->bridge.data = qdata;
@@ -693,6 +699,7 @@ static int airoha_ppe_flow_offload_replace(struct airoha_gdm_port *port,
 	struct airoha_foe_entry hwe;
 	int err, i, offload_type;
 	u16 addr_type = 0;
+	u32 priority = 0;
 	u8 l4proto = 0;
 
 	if (rhashtable_lookup(&eth->flow_table, &f->cookie,
@@ -773,6 +780,9 @@ static int airoha_ppe_flow_offload_replace(struct airoha_gdm_port *port,
 			break;
 		case FLOW_ACTION_PPPOE_PUSH:
 			break;
+		case FLOW_ACTION_PRIORITY:
+			priority = act->priority;
+			break;
 		default:
 			return -EOPNOTSUPP;
 		}
@@ -783,7 +793,7 @@ static int airoha_ppe_flow_offload_replace(struct airoha_gdm_port *port,
 		return -EINVAL;
 
 	err = airoha_ppe_foe_entry_prepare(eth, &hwe, odev, offload_type,
-					   &data, l4proto);
+					   &data, l4proto, priority);
 	if (err)
 		return err;
 
