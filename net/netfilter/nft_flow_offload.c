@@ -272,6 +272,16 @@ static int nft_flow_route(const struct nft_pktinfo *pkt,
 	return 0;
 }
 
+static void nft_flow_set_priority(const struct nft_pktinfo *pkt,
+				  struct flow_offload *flow,
+				  enum ip_conntrack_dir dir)
+{
+	struct flow_offload_tuple *tuple;
+
+	tuple = &flow->tuplehash[dir].tuple;
+	tuple->priority = pkt->skb->priority;
+}
+
 static bool nft_flow_offload_skip(struct sk_buff *skb, int family)
 {
 	if (skb_sec_path(skb))
@@ -364,6 +374,7 @@ static void nft_flow_offload_eval(const struct nft_expr *expr,
 	if (!flow)
 		goto err_flow_alloc;
 
+	nft_flow_set_priority(pkt, flow, dir);
 	flow_offload_route_init(flow, &route);
 	if (tcph)
 		flow_offload_ct_tcp(ct);

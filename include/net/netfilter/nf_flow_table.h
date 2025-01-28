@@ -138,6 +138,7 @@ struct flow_offload_tuple {
 					encap_num:2,
 					in_vlan_ingress:2;
 	u16				mtu;
+	u32				priority;
 	union {
 		struct {
 			struct dst_entry *dst_cache;

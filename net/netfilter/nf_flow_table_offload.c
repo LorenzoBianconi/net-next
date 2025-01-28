@@ -653,6 +653,14 @@ nf_flow_rule_route_common(struct net *net, const struct flow_offload *flow,
 		}
 	}
 
+	if (tuple->priority) {
+		struct flow_action_entry *entry;
+
+		entry = flow_action_entry_next(flow_rule);
+		entry->id = FLOW_ACTION_PRIORITY;
+		entry->priority = tuple->priority;
+	}
+
 	other_tuple = &flow->tuplehash[!dir].tuple;
 
 	for (i = 0; i < other_tuple->encap_num; i++) {
