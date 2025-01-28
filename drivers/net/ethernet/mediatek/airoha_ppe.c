@@ -475,11 +475,12 @@ static int airoha_get_dsa_port(struct net_device **dev)
 
 static int airoha_ppe_foe_entry_prepare(struct airoha_foe_entry *hwe,
 					struct net_device *dev, int type,
-					int l4proto, u8 *src_mac, u8 *dest_mac)
+					int l4proto, u8 *src_mac, u8 *dest_mac,
+					u32 mark)
 {
 	int dsa_port = airoha_get_dsa_port(&dev);
 	struct airoha_foe_mac_info_common *l2;
-	u32 data, ports_pad, val;
+	u32 channel, data, ports_pad, val;
 
 	memset(hwe, 0, sizeof(*hwe));
 
@@ -514,7 +515,12 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_foe_entry *hwe,
 	if (type == MTK_PPE_PKT_TYPE_IPV6_ROUTE_3T)
 		hwe->ipv6.ports = ports_pad;
 
-	data = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f);
+	channel = mark / AIROHA_NUM_QOS_QUEUES;
+	data = FIELD_PREP(AIROHA_FOE_CHANNEL,
+			  channel % AIROHA_NUM_QOS_CHANNELS) |
+	       FIELD_PREP(AIROHA_FOE_QID, mark % AIROHA_NUM_QOS_QUEUES) |
+	       FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f);
+
 	if (type == MTK_PPE_PKT_TYPE_BRIDGE) {
 		hwe->bridge.dest_mac_hi = get_unaligned_be32(dest_mac);
 		hwe->bridge.dest_mac_lo = get_unaligned_be16(dest_mac + 4);
@@ -821,6 +827,7 @@ static int airoha_ppe_flow_offload_replace(struct airoha_gdm_port *port,
 	int err, i, offload_type;
 	u16 addr_type = 0;
 	u8 l4proto = 0;
+	u32 mark = 0;
 
 	if (rhashtable_lookup(&eth->flow_table, &f->cookie,
 			      airoha_flow_table_params))
@@ -915,6 +922,9 @@ static int airoha_ppe_flow_offload_replace(struct airoha_gdm_port *port,
 			data.pppoe.sid = act->pppoe.sid;
 			data.pppoe.num++;
 			break;
+		case FLOW_ACTION_MARK:
+			mark = act->mark;
+			break;
 		default:
 			return -EOPNOTSUPP;
 		}
@@ -925,7 +935,8 @@ static int airoha_ppe_flow_offload_replace(struct airoha_gdm_port *port,
 		return -EINVAL;
 
 	err = airoha_ppe_foe_entry_prepare(&hwe, odev, offload_type, l4proto,
-					   data.eth.h_source, data.eth.h_dest);
+					   data.eth.h_source, data.eth.h_dest,
+					   mark);
 	if (err)
 		return err;
 
