@@ -67,13 +67,26 @@ static void airoha_qdma_irq_disable(struct airoha_qdma *qdma, int index,
 	airoha_qdma_set_irqmask(qdma, index, mask, 0);
 }
 
-static bool airhoa_is_lan_gdm_port(struct airoha_gdm_port *port)
+static bool airhoa_is_lan_gdm_port(struct airoha_eth *eth,
+				   struct airoha_gdm_port *port)
 {
 	/* GDM1 port on EN7581 SoC is connected to the lan dsa switch.
 	 * GDM{2,3,4} can be used as wan port connected to an external
 	 * phy module.
 	 */
-	return port->id == 1;
+
+	/* GDM2 is always used as WAN port */
+	if (port->id == 2)
+		return false;
+
+	if (eth->ports[1])
+		return true;
+
+	/* GDM1 is always used as LAN port */
+	if (port->id == 1)
+		return true;
+
+	return !eth->ports[0];
 }
 
 static void airoha_set_macaddr(struct airoha_gdm_port *port, const u8 *addr)
@@ -81,8 +94,8 @@ static void airoha_set_macaddr(struct airoha_gdm_port *port, const u8 *addr)
 	struct airoha_eth *eth = port->qdma->eth;
 	u32 val, reg;
 
-	reg = airhoa_is_lan_gdm_port(port) ? REG_FE_LAN_MAC_H
-					   : REG_FE_WAN_MAC_H;
+	reg = airhoa_is_lan_gdm_port(eth, port) ? REG_FE_LAN_MAC_H
+						: REG_FE_WAN_MAC_H;
 	val = (addr[0] << 16) | (addr[1] << 8) | addr[2];
 	airoha_fe_wr(eth, reg, val);
 
@@ -2468,11 +2481,10 @@ bool airoha_is_valid_gdm_port(struct airoha_eth *eth,
 }
 
 static int airoha_alloc_gdm_port(struct airoha_eth *eth,
-				 struct device_node *np, int index)
+				 struct device_node *np)
 {
 	const __be32 *id_ptr = of_get_property(np, "reg", NULL);
 	struct airoha_gdm_port *port;
-	struct airoha_qdma *qdma;
 	struct net_device *dev;
 	int err, p;
 	u32 id;
@@ -2503,7 +2515,6 @@ static int airoha_alloc_gdm_port(struct airoha_eth *eth,
 		return -ENOMEM;
 	}
 
-	qdma = &eth->qdma[index % AIROHA_MAX_NUM_QDMA];
 	dev->netdev_ops = &airoha_netdev_ops;
 	dev->ethtool_ops = &airoha_ethtool_ops;
 	dev->max_mtu = AIROHA_MAX_MTU;
@@ -2515,7 +2526,6 @@ static int airoha_alloc_gdm_port(struct airoha_eth *eth,
 	dev->features |= dev->hw_features;
 	dev->vlan_features = dev->hw_features;
 	dev->dev.of_node = np;
-	dev->irq = qdma->irq;
 	SET_NETDEV_DEV(dev, eth->dev);
 
 	/* reserve hw queues for HTB offloading */
@@ -2536,16 +2546,36 @@ static int airoha_alloc_gdm_port(struct airoha_eth *eth,
 	port = netdev_priv(dev);
 	u64_stats_init(&port->stats.syncp);
 	spin_lock_init(&port->stats.lock);
-	port->qdma = qdma;
 	port->dev = dev;
 	port->id = id;
 	eth->ports[p] = port;
 
-	err = airoha_metadata_dst_alloc(port);
-	if (err)
-		return err;
+	return airoha_metadata_dst_alloc(port);
+}
 
-	return register_netdev(dev);
+static int airoha_register_gdm_ports(struct airoha_eth *eth)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(eth->ports); i++) {
+		struct airoha_gdm_port *port = eth->ports[i];
+		struct airoha_qdma *qdma;
+		int err, qdma_idx;
+
+		if (!port)
+			continue;
+
+		qdma_idx = airhoa_is_lan_gdm_port(eth, port) ? 0 : 1;
+		qdma = &eth->qdma[qdma_idx];
+		port->dev->irq = qdma->irq;
+		port->qdma = qdma;
+
+		err = register_netdev(port->dev);
+		if (err)
+			return err;
+	}
+
+	return 0;
 }
 
 static int airoha_probe(struct platform_device *pdev)
@@ -2611,7 +2641,6 @@ static int airoha_probe(struct platform_device *pdev)
 	for (i = 0; i < ARRAY_SIZE(eth->qdma); i++)
 		airoha_qdma_start_napi(&eth->qdma[i]);
 
-	i = 0;
 	for_each_child_of_node(pdev->dev.of_node, np) {
 		if (!of_device_is_compatible(np, "airoha,eth-mac"))
 			continue;
@@ -2619,12 +2648,16 @@ static int airoha_probe(struct platform_device *pdev)
 		if (!of_device_is_available(np))
 			continue;
 
-		err = airoha_alloc_gdm_port(eth, np, i++);
+		err = airoha_alloc_gdm_port(eth, np);
 		if (err) {
 			of_node_put(np);
 			goto error_napi_stop;
 		}
 	}
+
+	err = airoha_register_gdm_ports(eth);
+	if (err)
+		goto error_napi_stop;
 
 	return 0;
 
@@ -2638,10 +2671,12 @@ error_hw_cleanup:
 	for (i = 0; i < ARRAY_SIZE(eth->ports); i++) {
 		struct airoha_gdm_port *port = eth->ports[i];
 
-		if (port && port->dev->reg_state == NETREG_REGISTERED) {
+		if (!port)
+			continue;
+
+		if (port->dev->reg_state == NETREG_REGISTERED)
 			unregister_netdev(port->dev);
-			airoha_metadata_dst_free(port);
-		}
+		airoha_metadata_dst_free(port);
 	}
 	free_netdev(eth->napi_dev);
 	platform_set_drvdata(pdev, NULL);
