@@ -5,6 +5,12 @@
  */
 
 #define NPU_NUM_CORES		8
+#define NPU_RX0_DESC_NUM	512
+#define NPU_RX1_DESC_NUM	512
+#define NPU_RX_DESC_NUM		(NPU_RX0_DESC_NUM + NPU_RX1_DESC_NUM)
+#define NPU_TX0_DESC_NUM	1024
+#define NPU_TX1_DESC_NUM	1024
+#define NPU_TX_DESC_NUM		(NPU_TX0_DESC_NUM + NPU_TX1_DESC_NUM)
 
 struct airoha_npu {
 	struct device *dev;
@@ -28,6 +34,12 @@ struct airoha_npu {
 					    u32 entry_size, u32 hash,
 					    bool ppe2);
 	} ops;
+
+	void *tx_desc;
+	struct {
+		void *desc;
+		struct page *page_list[NPU_RX_DESC_NUM];
+	} rx;
 };
 
 struct airoha_npu *airoha_npu_get(struct device *dev);

@@ -41,6 +41,21 @@
 #define REG_CR_MBQ8_CTRL(_n)		(NPU_MBOX_BASE_ADDR + 0x0b0 + ((_n) << 2))
 #define REG_CR_NPU_MIB(_n)		(NPU_MBOX_BASE_ADDR + 0x140 + ((_n) << 2))
 
+#define NPU_WLAN_BASE_ADDR		0x30d000
+
+#define NPU_IRQ_STATUS_MASK		(NPU_WLAN_BASE_ADDR + 0x030)
+#define NPU_IRQ_RXDONE_MASK(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 2) + 0x034)
+
+#define NPU_TX_BASE(_n)			(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x080)
+#define NPU_TX_DSCP_NUM(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x084)
+#define NPU_TX_DMA_IDX(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x088)
+#define NPU_TX_CPU_IDX(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x08c)
+
+#define NPU_RX_BASE(_n)			(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x180)
+#define NPU_RX_DSCP_NUM(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x184)
+#define NPU_RX_DMA_IDX(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x188)
+#define NPU_RX_CPU_IDX(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x18c)
+
 #define NPU_TIMER_BASE_ADDR		0x310100
 #define REG_WDT_TIMER_CTRL(_n)		(NPU_TIMER_BASE_ADDR + ((_n) * 0x100))
 #define WDT_EN_MASK			BIT(25)
@@ -114,6 +129,45 @@ struct ppe_mbox_data {
 			u32 data;
 		} set_info;
 	};
+};
+
+/* CTRL */
+#define NPU_RX_DMA_DESC_LAST_MASK	BIT(29)
+#define NPU_RX_DMA_DESC_LEN_MASK	GENMASK(28, 15)
+#define NPU_RX_DMA_DESC_CUR_LEN_MASK	GENMASK(14, 1)
+#define NPU_RX_DMA_DESC_DONE_MASK	BIT(0)
+/* INFO */
+#define NPU_RX_DMA_PKT_ID_MASK		GENMASK(31, 26)
+#define NPU_RX_DMA_SRC_PORT_MASK	GENMASK(25, 21)
+#define NPU_RX_DMA_CRSN_MASK		GENMASK(20, 16)
+#define NPU_RX_DMA_FOE_ID_MASK		GENMASK(15, 0)
+/* DATA */
+#define NPU_RX_DMA_SID_MASK		GENMASK(31, 16)
+#define NPU_RX_DMA_FRAG_TYPE_MASK	GENMASK(15, 14)
+#define NPU_RX_DMA_PRIORITY_MASK	GENMASK(13, 10)
+#define NPU_RX_DMA_RADIO_ID_MASK	GENMASK(9, 6)
+#define NPU_RX_DMA_VAP_ID_MASK		GENMASK(5, 2)
+#define NPU_RX_DMA_FRAME_TYPE_MASK	GENMASK(1, 0)
+
+struct npu_rx_dma_desc {
+	__le32 ctrl;
+	__le32 info;
+	__le32 data;
+	dma_addr_t addr;
+	__le64 rsv;
+};
+
+/* CTRL */
+#define NPU_TX_DMA_DESC_SCHED_MASK	BIT(31)
+#define NPU_TX_DMA_DESC_LEN_MASK	GENMASK(30, 18)
+#define NPU_TX_DMA_DESC_VEND_LEN_MASK	GENMASK(17, 1)
+#define NPU_TX_DMA_DESC_DONE_MASK	BIT(0)
+
+struct npu_tx_dma_desc {
+	__le32 ctrl;
+	dma_addr_t addr;
+	__le64 rsv;
+	u8 data[6];
 };
 
 static int airoha_npu_send_msg(struct airoha_npu *npu, int func_id,
@@ -401,6 +455,117 @@ static const struct regmap_config regmap_config = {
 	.disable_locking	= true,
 };
 
+static void airoha_npu_wifi_offload_deinit(struct airoha_npu *npu)
+{
+	struct npu_rx_dma_desc *desc = npu->rx.desc;
+	int i;
+
+	for (i = 0; i < NPU_RX_DESC_NUM; i++) {
+		if (!npu->rx.page_list[i])
+			continue;
+
+		dma_unmap_page(npu->dev, desc[i].addr, PAGE_SIZE,
+			       DMA_FROM_DEVICE);
+		__free_page(npu->rx.page_list[i]);
+	}
+}
+
+static irqreturn_t airoha_npu_wlan_rx0_handler(int irq, void *npu_instance)
+{
+	struct airoha_npu *npu = npu_instance;
+
+	regmap_write(npu->regmap, NPU_IRQ_STATUS_MASK, BIT(16));
+
+	return IRQ_HANDLED;
+}
+
+static int airoha_npu_wifi_offload_init(struct airoha_npu *npu,
+					struct platform_device *pdev)
+{
+	struct npu_tx_dma_desc *tx_desc;
+	struct npu_rx_dma_desc *rx_desc;
+	int i, err = -ENOMEM, irq;
+	dma_addr_t dma_addr;
+
+	npu->rx.desc = dmam_alloc_coherent(&pdev->dev,
+					   NPU_RX_DESC_NUM * sizeof(*rx_desc),
+					   &dma_addr, GFP_KERNEL);
+	if (!npu->rx.desc)
+		return -ENOMEM;
+
+	rx_desc = npu->rx.desc;
+	for (i = 0; i < NPU_RX_DESC_NUM; i++) {
+		struct page *page = __dev_alloc_page(GFP_KERNEL);
+
+		if (!page)
+			goto error_offload_deinit;
+
+		rx_desc[i].addr = dma_map_page(&pdev->dev, page, 0, PAGE_SIZE,
+					       DMA_FROM_DEVICE);
+		if (dma_mapping_error(&pdev->dev, rx_desc[i].addr)) {
+			__free_page(page);
+			goto error_offload_deinit;
+		}
+
+		npu->rx.page_list[i] = page;
+	}
+
+	regmap_write(npu->regmap, NPU_RX_DSCP_NUM(0), NPU_RX0_DESC_NUM);
+	regmap_write(npu->regmap, NPU_RX_DSCP_NUM(1), NPU_RX1_DESC_NUM);
+
+	regmap_write(npu->regmap, NPU_RX_CPU_IDX(0), 0);
+	regmap_write(npu->regmap, NPU_RX_CPU_IDX(1), 0);
+
+	regmap_write(npu->regmap, NPU_RX_DMA_IDX(0), 0);
+	regmap_write(npu->regmap, NPU_RX_DMA_IDX(1), 0);
+
+	regmap_write(npu->regmap, NPU_RX_BASE(0), dma_addr);
+	regmap_write(npu->regmap, NPU_RX_BASE(1),
+		     dma_addr + NPU_RX0_DESC_NUM * sizeof(*rx_desc));
+
+	irq = platform_get_irq(pdev, 1 + ARRAY_SIZE(npu->cores));
+	if (irq < 0) {
+		err = irq;
+		goto error_offload_deinit;
+	}
+
+	err = devm_request_irq(&pdev->dev, irq, airoha_npu_wlan_rx0_handler,
+			       IRQF_SHARED, "npu-wlan-rx0", npu);
+	if (err)
+		goto error_offload_deinit;
+
+	regmap_write(npu->regmap, NPU_IRQ_RXDONE_MASK(0), BIT(16));
+	regmap_write(npu->regmap, NPU_IRQ_RXDONE_MASK(1), BIT(17));
+
+	npu->tx_desc = dmam_alloc_coherent(&pdev->dev,
+					   NPU_TX_DESC_NUM * sizeof(*tx_desc),
+					   &dma_addr, GFP_KERNEL);
+	if (!npu->tx_desc) {
+		err = -ENOMEM;
+		goto error_offload_deinit;
+	}
+
+	regmap_write(npu->regmap, NPU_TX_DSCP_NUM(2), NPU_TX0_DESC_NUM);
+	regmap_write(npu->regmap, NPU_TX_DSCP_NUM(3), NPU_TX1_DESC_NUM);
+
+	regmap_write(npu->regmap, NPU_TX_CPU_IDX(2), 0);
+	regmap_write(npu->regmap, NPU_TX_CPU_IDX(3), 0);
+
+	regmap_write(npu->regmap, NPU_TX_DMA_IDX(2), 0);
+	regmap_write(npu->regmap, NPU_TX_DMA_IDX(3), 0);
+
+	regmap_write(npu->regmap, NPU_TX_BASE(2), dma_addr);
+	regmap_write(npu->regmap, NPU_TX_BASE(3),
+		     dma_addr + NPU_TX0_DESC_NUM * sizeof(*tx_desc));
+
+	return 0;
+
+error_offload_deinit:
+	airoha_npu_wifi_offload_deinit(npu);
+
+	return err;
+}
+
 static int airoha_npu_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -469,9 +634,15 @@ static int airoha_npu_probe(struct platform_device *pdev)
 	if (err)
 		return err;
 
-	err = airoha_npu_run_firmware(dev, base, rmem);
+	err = airoha_npu_wifi_offload_init(npu, pdev);
 	if (err)
+		return err;
+
+	err = airoha_npu_run_firmware(dev, base, rmem);
+	if (err) {
+		airoha_npu_wifi_offload_deinit(npu);
 		return dev_err_probe(dev, err, "failed to run npu firmware\n");
+	}
 
 	regmap_write(npu->regmap, REG_CR_NPU_MIB(10),
 		     rmem->base + NPU_EN7581_FIRMWARE_RV32_MAX_SIZE);
@@ -503,6 +674,8 @@ static void airoha_npu_remove(struct platform_device *pdev)
 
 	for (i = 0; i < ARRAY_SIZE(npu->cores); i++)
 		cancel_work_sync(&npu->cores[i].wdt_work);
+
+	airoha_npu_wifi_offload_deinit(npu);
 }
 
 static struct platform_driver airoha_npu_driver = {
