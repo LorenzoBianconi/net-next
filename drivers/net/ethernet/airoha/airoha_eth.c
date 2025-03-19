@@ -9,6 +9,7 @@
 #include <linux/tcp.h>
 #include <linux/u64_stats_sync.h>
 #include <net/dst_metadata.h>
+#include <net/netdev_rx_queue.h>
 #include <net/page_pool/helpers.h>
 #include <net/pkt_cls.h>
 #include <uapi/linux/ppp_defs.h>
@@ -2656,6 +2657,30 @@ static int airoha_dev_tc_setup(struct net_device *dev, enum tc_setup_type type,
 	}
 }
 
+static int airoha_dev_set_rx_maxrate(struct net_device *dev, int queue,
+				     u32 rate)
+{
+	struct netdev_rx_queue *rxq = __netif_get_rx_queue(dev, queue);
+	struct airoha_gdm_port *port = netdev_priv(dev);
+	struct airoha_qdma *qdma = port->qdma;
+	u32 rate_val = rate * 1000; /* Kbps */
+	int err;
+
+	if (rate == rxq->rx_maxrate)
+		return 0;
+
+	if (!qdma->q_rx[queue].ndesc)
+		return -EINVAL;
+
+	err = airoha_qdma_init_rl_config(qdma, queue, !!rate,
+					 TRTCM_BYTE_UNIT);
+	if (err)
+		return err;
+
+	return airoha_qdma_set_rl_token_bucket(qdma, queue, rate_val,
+					       MIN_TOKEN_SIZE);
+}
+
 static const struct net_device_ops airoha_netdev_ops = {
 	.ndo_init		= airoha_dev_init,
 	.ndo_open		= airoha_dev_open,
@@ -2666,6 +2691,7 @@ static const struct net_device_ops airoha_netdev_ops = {
 	.ndo_get_stats64        = airoha_dev_get_stats64,
 	.ndo_set_mac_address	= airoha_dev_set_macaddr,
 	.ndo_setup_tc		= airoha_dev_tc_setup,
+	.ndo_set_rx_maxrate	= airoha_dev_set_rx_maxrate,
 };
 
 static const struct ethtool_ops airoha_ethtool_ops = {

@@ -1125,18 +1125,65 @@ static ssize_t store_rps_dev_flow_table_cnt(struct netdev_rx_queue *queue,
 	return len;
 }
 
+static ssize_t rx_maxrate_show(struct netdev_rx_queue *queue, char *buf)
+{
+	return sysfs_emit(buf, "%lu\n", queue->rx_maxrate);
+}
+
+static ssize_t rx_maxrate_store(struct netdev_rx_queue *queue,
+				const char *buf, size_t len)
+{
+	int err, index = get_netdev_rx_queue_index(queue);
+	struct net_device *dev = queue->dev;
+	static DEFINE_MUTEX(rx_maxrate_mutex);
+	u32 rate;
+
+	if (!capable(CAP_NET_ADMIN))
+		return -EPERM;
+
+	/* The check is also done later; this helps returning early without
+	 * hitting the locking section below.
+	 */
+	if (!dev->netdev_ops->ndo_set_rx_maxrate)
+		return -EOPNOTSUPP;
+
+	err = kstrtou32(buf, 10, &rate);
+	if (err < 0)
+		return err;
+
+	mutex_lock(&rx_maxrate_mutex);
+
+	err = -EOPNOTSUPP;
+	netdev_lock_ops(dev);
+	if (dev->netdev_ops->ndo_set_rx_maxrate)
+		err = dev->netdev_ops->ndo_set_rx_maxrate(dev, index, rate);
+	netdev_unlock_ops(dev);
+
+	if (!err)
+		queue->rx_maxrate = rate;
+
+	mutex_unlock(&rx_maxrate_mutex);
+
+	return !err ? len : err;
+}
+
 static struct rx_queue_attribute rps_cpus_attribute __ro_after_init
 	= __ATTR(rps_cpus, 0644, show_rps_map, store_rps_map);
 
 static struct rx_queue_attribute rps_dev_flow_table_cnt_attribute __ro_after_init
 	= __ATTR(rps_flow_cnt, 0644,
 		 show_rps_dev_flow_table_cnt, store_rps_dev_flow_table_cnt);
+
+static struct rx_queue_attribute queue_rx_maxrate __ro_after_init
+	= __ATTR(rx_maxrate, 0644, rx_maxrate_show, rx_maxrate_store);
+
 #endif /* CONFIG_RPS */
 
 static struct attribute *rx_queue_default_attrs[] __ro_after_init = {
 #ifdef CONFIG_RPS
 	&rps_cpus_attribute.attr,
 	&rps_dev_flow_table_cnt_attribute.attr,
+	&queue_rx_maxrate.attr,
 #endif
 	NULL
 };

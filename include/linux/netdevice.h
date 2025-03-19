@@ -1340,6 +1340,10 @@ struct netdev_net_notifier {
  *			     int queue_index, u32 maxrate);
  *	Called when a user wants to set a max-rate limitation of specific
  *	TX queue.
+ * int (*ndo_set_rx_maxrate)(struct net_device *dev,
+ *			     int queue_index, u32 maxrate);
+ *	Called when a user wants to set a max-rate limitation of specific
+ *	RX queue.
  * int (*ndo_get_iflink)(const struct net_device *dev);
  *	Called to get the iflink value of this device.
  * int (*ndo_fill_metadata_dst)(struct net_device *dev, struct sk_buff *skb);
@@ -1613,6 +1617,9 @@ struct net_device_ops {
 							void *priv);
 
 	int			(*ndo_set_tx_maxrate)(struct net_device *dev,
+						      int queue_index,
+						      u32 maxrate);
+	int			(*ndo_set_rx_maxrate)(struct net_device *dev,
 						      int queue_index,
 						      u32 maxrate);
 	int			(*ndo_get_iflink)(const struct net_device *dev);

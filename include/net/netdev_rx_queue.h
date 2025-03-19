@@ -14,6 +14,7 @@ struct netdev_rx_queue {
 #ifdef CONFIG_RPS
 	struct rps_map __rcu		*rps_map;
 	struct rps_dev_flow_table __rcu	*rps_flow_table;
+	unsigned long			rx_maxrate;
 #endif
 	struct kobject			kobj;
 	const struct attribute_group	**groups;
