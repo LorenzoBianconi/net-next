@@ -116,6 +116,70 @@ struct ppe_mbox_data {
 	};
 };
 
+enum {
+	WLAN_FUNC_SET_WAIT_PCIE_ADDR,
+	WLAN_FUNC_SET_WAIT_DESC,
+	WLAN_FUNC_SET_WAIT_NPU_INIT_DONE,
+	WLAN_FUNC_SET_WAIT_TRAN_TO_CPU,
+	WLAN_FUNC_SET_WAIT_BA_WIN_SIZE,
+	WLAN_FUNC_SET_WAIT_DRIVER_MODEL,
+	WLAN_FUNC_SET_WAIT_DEL_STA,
+	WLAN_FUNC_SET_WAIT_DRAM_BA_NODE_ADDR,
+	WLAN_FUNC_SET_WAIT_PKT_BUF_ADDR,
+	WLAN_FUNC_SET_WAIT_IS_TEST_NOBA,
+	WLAN_FUNC_SET_WAIT_FLUSHONE_TIMEOUT,
+	WLAN_FUNC_SET_WAIT_FLUSHALL_TIMEOUT,
+	WLAN_FUNC_SET_WAIT_IS_FORCE_TO_CPU,
+	WLAN_FUNC_SET_WAIT_PCIE_STATE,
+	WLAN_FUNC_SET_WAIT_PCIE_PORT_TYPE,
+	WLAN_FUNC_SET_WAIT_ERROR_RETRY_TIMES,
+	WLAN_FUNC_SET_WAIT_BAR_INFO,
+	WLAN_FUNC_SET_WAIT_FAST_FLAG,
+	WLAN_FUNC_SET_WAIT_NPU_BAND0_ONCPU,
+	WLAN_FUNC_SET_WAIT_TX_RING_PCIE_ADDR,
+	WLAN_FUNC_SET_WAIT_TX_DESC_HW_BASE,
+	WLAN_FUNC_SET_WAIT_TX_BUF_SPACE_HW_BASE,
+	WLAN_FUNC_SET_WAIT_RX_RING_FOR_TXDONE_HW_BASE,
+	WLAN_FUNC_SET_WAIT_TX_PKT_BUF_ADDR,
+	WLAN_FUNC_SET_WAIT_INODE_TXRX_REG_ADDR,
+	WLAN_FUNC_SET_WAIT_INODE_DEBUG_FLAG,
+	WLAN_FUNC_SET_WAIT_INODE_HW_CFG_INFO,
+	WLAN_FUNC_SET_WAIT_INODE_STOP_ACTION,
+	WLAN_FUNC_SET_WAIT_INODE_PCIE_SWAP,
+	WLAN_FUNC_SET_WAIT_RATELIMIT_CTRL,
+	WLAN_FUNC_SET_WAIT_HWNAT_INIT,
+	WLAN_FUNC_SET_WAIT_ARHT_CHIP_INFO,
+	WLAN_FUNC_SET_WAIT_TX_BUF_CHECK_ADDR,
+	WLAN_FUNC_SET_WAIT_DEBUG_ARRAY_ADDR,
+};
+
+#define WLAN_MAX_SSID	8
+#define WLAN_MAX_ENTRY	128
+
+struct wlan_mbox_data {
+	u32 ifindex:4;
+	u32 func_type:4;
+	u32 func_id;
+	union {
+		u32 data;
+		struct {
+			u32 tx_pkts;
+			u64 rx_pkts_2g[WLAN_MAX_SSID];
+			u64 rx_pkts_5g[WLAN_MAX_SSID];
+			u64 rx_bytes_2g[WLAN_MAX_SSID];
+			u64 rx_bytes_5g[WLAN_MAX_SSID];
+			u8 omac_idx_5g[WLAN_MAX_SSID];
+			u8 omac_idx_2g[WLAN_MAX_SSID];
+			u64 rx_ap_cli_pkts_2g;
+			u64 rx_ap_cli_pkts_5g;
+			u64 rx_ap_cli_bytes_2g;
+			u64 rx_ap_cli_bytes_5g;
+			u64 rx_pkts_entry[2][WLAN_MAX_ENTRY];
+			u64 rx_bytes_entry[2][WLAN_MAX_ENTRY];
+		} stats;
+	};
+};
+
 static int airoha_npu_send_msg(struct airoha_npu *npu, int func_id,
 			       void *p, int size)
 {
@@ -348,6 +412,93 @@ static int airoha_npu_foe_commit_entry(struct airoha_npu *npu,
 	return err;
 }
 
+static int airoha_npu_wlan_send_msg(struct airoha_npu *npu, int index,
+				    int func_id, u32 data)
+{
+	struct wlan_mbox_data *wlan_data;
+	int err;
+
+	wlan_data = kzalloc(sizeof(*wlan_data), GFP_KERNEL);
+	if (!wlan_data)
+		return -ENOMEM;
+
+	wlan_data->ifindex = index;
+	wlan_data->func_type = NPU_OP_SET;
+	wlan_data->func_id = func_id;
+	wlan_data->data = data;
+
+	err = airoha_npu_send_msg(npu, NPU_FUNC_WIFI, wlan_data,
+				  sizeof(*wlan_data));
+	kfree(wlan_data);
+
+	return err;
+}
+
+static struct reserved_mem *
+airoha_npu_get_reserved_memory(struct airoha_npu *npu, const char *name)
+{
+	struct device *dev = npu->dev;
+	struct reserved_mem *rmem;
+	struct device_node *np;
+	int index;
+
+	index = of_property_match_string(dev->of_node, "memory-region-names",
+					 name);
+	if (index < 0)
+		return NULL;
+
+	 np = of_parse_phandle(dev->of_node, "memory-region", index);
+        if (!np)
+                return NULL;
+
+        rmem = of_reserved_mem_lookup(np);
+	of_node_put(np);
+
+	return rmem;
+}
+
+static int airoha_npu_wlan_set_reserved_memory(struct airoha_npu *npu,
+					       int index, const char *name,
+					       int func_id)
+{
+	struct reserved_mem *rmem;
+
+	rmem = airoha_npu_get_reserved_memory(npu, name);
+	if (!rmem)
+		return -ENODEV;
+
+	return airoha_npu_wlan_send_msg(npu, index, func_id, rmem->base);
+}
+
+static int airoha_npu_wlan_init(struct airoha_npu *npu)
+{
+	int err;
+
+	err = airoha_npu_wlan_send_msg(npu, 1,
+				       WLAN_FUNC_SET_WAIT_NPU_BAND0_ONCPU, 0);
+	if (err)
+		return err;
+
+	err = airoha_npu_wlan_set_reserved_memory(npu, 0, "tx-bufid",
+			WLAN_FUNC_SET_WAIT_TX_BUF_CHECK_ADDR);
+	if (err)
+		return err;
+
+	err = airoha_npu_wlan_set_reserved_memory(npu, 0, "pkt",
+			WLAN_FUNC_SET_WAIT_PKT_BUF_ADDR);
+	if (err)
+		return err;
+
+	err = airoha_npu_wlan_set_reserved_memory(npu, 0, "tx-pkt",
+			WLAN_FUNC_SET_WAIT_TX_PKT_BUF_ADDR);
+	if (err)
+		return err;
+
+	return airoha_npu_wlan_send_msg(npu, 0,
+					WLAN_FUNC_SET_WAIT_IS_FORCE_TO_CPU,
+					0);
+}
+
 struct airoha_npu *airoha_npu_get(struct device *dev)
 {
 	struct platform_device *pdev;
@@ -507,6 +658,10 @@ static int airoha_npu_probe(struct platform_device *pdev)
 	regmap_write(npu->regmap, REG_CR_BOOT_CONFIG, 0xf7);
 	regmap_write(npu->regmap, REG_CR_BOOT_TRIGGER, 0x1);
 	msleep(100);
+
+	err = airoha_npu_wlan_init(npu);
+	if (err)
+		return err;
 
 	platform_set_drvdata(pdev, npu);
 
