@@ -50,6 +50,10 @@ struct airoha_npu {
 						   int index, u32 addr);
 		int (*wlan_get_npu_support_map)(struct airoha_npu *npu,
 						int index, u32 *map);
+		void (*wlan_set_irq_mask)(struct airoha_npu *npu, int q);
+		u32 (*wlan_get_irq)(struct airoha_npu *npu, int q);
+		void (*wlan_irq_enable)(struct airoha_npu *npu, int q);
+		void (*wlan_irq_disable)(struct airoha_npu *npu, int q);
 	} ops;
 };
 

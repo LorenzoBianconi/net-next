@@ -41,6 +41,12 @@
 #define REG_CR_MBQ8_CTRL(_n)		(NPU_MBOX_BASE_ADDR + 0x0b0 + ((_n) << 2))
 #define REG_CR_NPU_MIB(_n)		(NPU_MBOX_BASE_ADDR + 0x140 + ((_n) << 2))
 
+#define NPU_WLAN_BASE_ADDR		0x30d000
+
+#define REG_IRQ_STATUS			(NPU_WLAN_BASE_ADDR + 0x030)
+#define REG_IRQ_RXDONE(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 2) + 0x034)
+#define NPU_IRQ_RX_MASK(_n)		((_n) == 1 ? BIT(17) : BIT(16))
+
 #define NPU_TIMER_BASE_ADDR		0x310100
 #define REG_WDT_TIMER_CTRL(_n)		(NPU_TIMER_BASE_ADDR + ((_n) * 0x100))
 #define WDT_EN_MASK			BIT(25)
@@ -638,6 +644,31 @@ static int airoha_npu_wlan_init(struct airoha_npu *npu)
 					0);
 }
 
+static void airoha_npu_wlan_set_irq_mask(struct airoha_npu *npu, int q)
+{
+	/* FIXME */
+	regmap_set_bits(npu->regmap, REG_IRQ_STATUS, NPU_IRQ_RX_MASK(q));
+}
+
+static u32 airoha_npu_wlan_get_irq(struct airoha_npu *npu, int q)
+{
+	/* FIXME */
+	u32 val;
+
+	regmap_read(npu->regmap, REG_IRQ_STATUS, &val);
+	return val;
+}
+
+static void airoha_npu_wlan_irq_enable(struct airoha_npu *npu, int q)
+{
+	regmap_set_bits(npu->regmap, REG_IRQ_RXDONE(q), NPU_IRQ_RX_MASK(q));
+}
+
+static void airoha_npu_wlan_irq_disable(struct airoha_npu *npu, int q)
+{
+	regmap_clear_bits(npu->regmap, REG_IRQ_RXDONE(q), NPU_IRQ_RX_MASK(q));
+}
+
 struct airoha_npu *airoha_npu_get(struct device *dev)
 {
 	struct platform_device *pdev;
@@ -745,6 +776,10 @@ static int airoha_npu_probe(struct platform_device *pdev)
 		airoha_npu_wlan_set_rx_ring_for_txdone;
 	npu->ops.wlan_get_npu_support_map =
 		airoha_npu_wlan_get_npu_support_map;
+	npu->ops.wlan_set_irq_mask = airoha_npu_wlan_set_irq_mask;
+	npu->ops.wlan_get_irq = airoha_npu_wlan_get_irq;
+	npu->ops.wlan_irq_enable = airoha_npu_wlan_irq_enable;
+	npu->ops.wlan_irq_disable = airoha_npu_wlan_irq_disable;
 
 	npu->regmap = devm_regmap_init_mmio(dev, base, &regmap_config);
 	if (IS_ERR(npu->regmap))
