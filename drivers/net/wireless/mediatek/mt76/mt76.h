@@ -13,6 +13,7 @@
 #include <linux/leds.h>
 #include <linux/usb.h>
 #include <linux/average.h>
+#include <linux/soc/airoha/airoha_npu.h>
 #include <linux/soc/mediatek/mtk_wed.h>
 #include <net/mac80211.h>
 #include <net/page_pool/helpers.h>
@@ -672,6 +673,8 @@ struct mt76_mmio {
 	struct mtk_wed_device wed_hif2;
 	struct completion wed_reset;
 	struct completion wed_reset_complete;
+
+	struct airoha_npu __rcu *npu;
 };
 
 struct mt76_rx_status {
@@ -1545,6 +1548,9 @@ int mt76_testmode_dump(struct ieee80211_hw *hw, struct sk_buff *skb,
 		       struct netlink_callback *cb, void *data, int len);
 int mt76_testmode_set_state(struct mt76_phy *phy, enum mt76_testmode_state state);
 int mt76_testmode_alloc_skb(struct mt76_phy *phy, u32 len);
+
+int mt76_npu_init(struct mt76_dev *dev);
+void mt76_npu_deinit(struct mt76_dev *dev);
 
 static inline void mt76_testmode_reset(struct mt76_phy *phy, bool disable)
 {

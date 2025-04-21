@@ -133,6 +133,9 @@ static int mt7996_pci_probe(struct pci_dev *pdev,
 	mt7996_wfsys_reset(dev);
 	hif2 = mt7996_pci_init_hif2(pdev);
 
+	if (mt76_npu_init(mdev))
+		dev_warn(mdev->dev, "failed loading npu\n");
+
 	ret = mt7996_mmio_wed_init(dev, pdev, false, &irq);
 	if (ret < 0)
 		goto free_wed_or_irq_vector;
