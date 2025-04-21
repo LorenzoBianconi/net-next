@@ -8,6 +8,7 @@
 #define AIROHA_NPU_H
 
 #define NPU_NUM_CORES		8
+#define NPU_NUM_IRQ		6
 
 struct airoha_npu {
 #if (IS_BUILTIN(CONFIG_NET_AIROHA_NPU) || IS_MODULE(CONFIG_NET_AIROHA_NPU))
@@ -20,6 +21,8 @@ struct airoha_npu {
 		spinlock_t lock;
 		struct work_struct wdt_work;
 	} cores[NPU_NUM_CORES];
+
+	int irqs[NPU_NUM_IRQ];
 
 	struct {
 		int (*ppe_init)(struct airoha_npu *npu);
