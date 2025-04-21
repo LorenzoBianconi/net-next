@@ -4,9 +4,13 @@
  * Author: Lorenzo Bianconi <lorenzo@kernel.org>
  */
 
+#ifndef AIROHA_NPU_H
+#define AIROHA_NPU_H
+
 #define NPU_NUM_CORES		8
 
 struct airoha_npu {
+#if (IS_BUILTIN(CONFIG_NET_AIROHA_NPU) || IS_MODULE(CONFIG_NET_AIROHA_NPU))
 	struct device *dev;
 	struct regmap *regmap;
 
@@ -55,6 +59,7 @@ struct airoha_npu {
 		void (*wlan_irq_enable)(struct airoha_npu *npu, int q);
 		void (*wlan_irq_disable)(struct airoha_npu *npu, int q);
 	} ops;
+#endif
 };
 
 static inline bool airoha_npu_device_active(struct airoha_npu *npu)
@@ -62,5 +67,18 @@ static inline bool airoha_npu_device_active(struct airoha_npu *npu)
 	return !!npu;
 }
 
+#if (IS_BUILTIN(CONFIG_NET_AIROHA_NPU) || IS_MODULE(CONFIG_NET_AIROHA_NPU))
 struct airoha_npu *airoha_npu_get(struct device *dev);
 void airoha_npu_put(struct airoha_npu *npu);
+#else
+static inline struct airoha_npu *airoha_npu_get(struct device *dev)
+{
+	return NULL;
+}
+
+static inline void airoha_npu_put(struct airoha_npu *npu)
+{
+}
+#endif
+
+#endif /* AIROHA_NPU_H */
