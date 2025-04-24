@@ -11,6 +11,7 @@ config NET_AIROHA_NPU
 	tristate "Airoha NPU support"
 	select WANT_DEV_COREDUMP
 	select REGMAP_MMIO
+	select PAGE_POOL
 	help
 	  This driver supports Airoha Network Processor (NPU) available
 	  on the Airoha Soc family.

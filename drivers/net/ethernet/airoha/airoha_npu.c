@@ -12,6 +12,7 @@
 #include <linux/of_reserved_mem.h>
 #include <linux/regmap.h>
 #include <linux/soc/airoha/airoha_npu.h>
+#include <net/page_pool/helpers.h>
 
 #define NPU_EN7581_FIRMWARE_DATA		"airoha/en7581_npu_data.bin"
 #define NPU_EN7581_FIRMWARE_RV32		"airoha/en7581_npu_rv32.bin"
@@ -45,6 +46,11 @@
 #define REG_IRQ_STATUS			(NPU_WLAN_BASE_ADDR + 0x030)
 #define REG_IRQ_RXDONE(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 2) + 0x034)
 #define NPU_IRQ_RX_MASK(_n)		((_n) == 1 ? BIT(17) : BIT(16))
+
+#define REG_RX_BASE(_n)			(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x180)
+#define REG_RX_DSCP_NUM(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x184)
+#define REG_RX_DMA_IDX(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x188)
+#define REG_RX_CPU_IDX(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x18c)
 
 #define NPU_TIMER_BASE_ADDR		0x310100
 #define REG_WDT_TIMER_CTRL(_n)		(NPU_TIMER_BASE_ADDR + ((_n) * 0x100))
@@ -614,33 +620,235 @@ static int airoha_npu_wlan_get_npu_support_map(struct airoha_npu *npu,
 				       map);
 }
 
+static int airoha_npu_fill_rx_queue(struct airoha_npu *npu,
+				    struct airoha_npu_queue *q)
+{
+	enum dma_data_direction dir = page_pool_get_dma_dir(q->page_pool);
+	int nframes = 0;
+
+	while (q->queued < q->ndesc - 1) {
+		struct airoha_npu_rx_dma_desc *desc = &q->desc[q->head];
+		struct airoha_npu_queue_entry *e = &q->entry[q->head];
+		struct page *page;
+		int offset;
+
+		page = page_pool_dev_alloc_frag(q->page_pool, &offset,
+						q->buf_size);
+		if (!page)
+			return -ENOMEM;
+
+		e->buf = page_address(page) + offset;
+		e->dma_addr = page_pool_get_dma_addr(page) + offset;
+		e->dma_len = SKB_WITH_OVERHEAD(q->buf_size);
+
+		memset(desc, 0, sizeof(*desc));
+		desc->addr = e->dma_addr;
+
+		dma_sync_single_for_device(npu->dev, e->dma_addr, e->dma_len,
+					   dir);
+
+		q->head = (q->head + 1) % q->ndesc;
+		q->queued++;
+	}
+
+	return nframes;
+}
+
+static struct sk_buff *airoha_npu_rx_dequeue(struct airoha_npu *npu, int qid)
+{
+	struct airoha_npu_rx_dma_desc *desc;
+	struct airoha_npu_queue *q;
+	struct sk_buff *skb = NULL;
+	int i, nframes, index;
+
+	if (qid >= ARRAY_SIZE(npu->q_rx))
+		return NULL;
+
+	q = &npu->q_rx[qid];
+	desc = &q->desc[q->tail];
+	index = q->tail;
+
+	nframes = FIELD_GET(NPU_RX_DMA_PKT_COUNT_MASK, desc->info);
+	nframes = max_t(int, nframes, 1);
+
+	for (i = 0; i < nframes; i++) {
+		struct airoha_npu_queue_entry *e = &q->entry[index];
+		struct page *page = virt_to_head_page(e->buf);
+		int len = FIELD_GET(NPU_RX_DMA_DESC_CUR_LEN_MASK,
+				    desc->ctrl);
+
+		if (!FIELD_GET(NPU_RX_DMA_DESC_DONE_MASK, desc->ctrl)) {
+			dev_kfree_skb(skb);
+			return NULL;
+		}
+
+		dma_sync_single_for_cpu(npu->dev, desc->addr,
+					SKB_WITH_OVERHEAD(q->buf_size),
+					page_pool_get_dma_dir(q->page_pool));
+
+		if (!skb) {
+			skb = build_skb(e->buf, q->buf_size);
+			if (!skb)
+				return NULL;
+
+			__skb_put(skb, len);
+			skb_mark_for_recycle(skb);
+			skb_reset_mac_header(skb);
+		} else {
+			struct skb_shared_info *shinfo = skb_shinfo(skb);
+			int nr_frags = shinfo->nr_frags;
+
+			if (nr_frags < ARRAY_SIZE(shinfo->frags))
+				skb_add_rx_frag(skb, nr_frags, page,
+						e->buf - page_address(page),
+						len, q->buf_size);
+		}
+
+		index = (index + 1) % q->ndesc;
+		desc = &q->desc[index];
+	}
+	q->tail = index;
+	q->queued -= i;
+
+	airoha_npu_fill_rx_queue(npu, q);
+	regmap_write(npu->regmap, REG_RX_CPU_IDX(qid), q->tail);
+
+	return skb;
+}
+
+static int airoha_npu_wlan_init_rx_queue(struct airoha_npu *npu,
+					 struct airoha_npu_queue *q)
+{
+	const struct page_pool_params pp_params = {
+		.order = 0,
+		.pool_size = 256,
+		.flags = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV,
+		.dma_dir = DMA_FROM_DEVICE,
+		.max_len = PAGE_SIZE,
+		.nid = NUMA_NO_NODE,
+		.dev = npu->dev,
+	};
+	struct airoha_npu_rx_dma_desc *rx_desc;
+	struct airoha_npu_queue_entry *entry;
+	int ndesc, qid = q - &npu->q_rx[0];
+	dma_addr_t dma_addr;
+
+	ndesc = qid == 1 ? NPU_RX1_DESC_NUM : NPU_RX0_DESC_NUM;
+	rx_desc = dmam_alloc_coherent(npu->dev, ndesc * sizeof(*rx_desc),
+				      &dma_addr, GFP_KERNEL);
+	if (!rx_desc)
+		return -ENOMEM;
+
+	entry = devm_kzalloc(npu->dev, ndesc * sizeof(*entry), GFP_KERNEL);
+	if (!entry)
+		return -ENOMEM;
+
+	q->page_pool = page_pool_create(&pp_params);
+	if (IS_ERR(q->page_pool)) {
+		int err = PTR_ERR(q->page_pool);
+
+		q->page_pool = NULL;
+		return err;
+	}
+
+	q->desc = rx_desc;
+	q->entry = entry;
+	q->ndesc = ndesc;
+	q->buf_size = PAGE_SIZE / 2;
+	airoha_npu_fill_rx_queue(npu, q);
+
+	regmap_write(npu->regmap, REG_RX_DSCP_NUM(qid), ndesc);
+	regmap_write(npu->regmap, REG_RX_CPU_IDX(qid), 0);
+	regmap_write(npu->regmap, REG_RX_DMA_IDX(qid), 0);
+	regmap_write(npu->regmap, REG_RX_BASE(qid), dma_addr);
+
+	return 0;
+}
+
+static void airoha_npu_cleanup_rx_queue(struct airoha_npu *npu,
+					struct airoha_npu_queue *q)
+{
+	while (q->queued) {
+		struct airoha_npu_queue_entry *e = &q->entry[q->tail];
+
+		dma_sync_single_for_cpu(npu->dev, e->dma_addr, e->dma_len,
+					page_pool_get_dma_dir(q->page_pool));
+		page_pool_put_full_page(q->page_pool,
+					virt_to_head_page(e->buf),
+					false);
+		q->tail = (q->tail + 1) % q->ndesc;
+		q->queued--;
+	}
+}
+
+static void airoha_npu_cleanup_rx_queues(struct airoha_npu *npu)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(npu->q_rx); i++) {
+		airoha_npu_cleanup_rx_queue(npu, &npu->q_rx[i]);
+		if (npu->q_rx[i].page_pool)
+			page_pool_destroy(npu->q_rx[i].page_pool);
+	}
+}
+
+static int airoha_npu_wlan_init_txrx_queues(struct airoha_npu *npu)
+{
+	int i, err = 0;
+
+	for (i = 0; i < ARRAY_SIZE(npu->q_rx); i++) {
+		err = airoha_npu_wlan_init_rx_queue(npu, &npu->q_rx[i]);
+		if (err)
+			goto cleanup_rx_queues;
+	}
+
+	return 0;
+
+cleanup_rx_queues:
+	airoha_npu_cleanup_rx_queues(npu);
+
+	return err;
+}
+
 static int airoha_npu_wlan_init(struct airoha_npu *npu)
 {
 	int err;
 
+	err = airoha_npu_wlan_init_txrx_queues(npu);
+	if (err)
+		return err;
+
 	err = airoha_npu_wlan_send_msg(npu, 1,
 				       WLAN_FUNC_SET_WAIT_NPU_BAND0_ONCPU, 0);
 	if (err)
-		return err;
+		goto cleanup_rx_queues;
 
 	err = airoha_npu_wlan_set_reserved_memory(npu, 0, "tx-bufid",
 			WLAN_FUNC_SET_WAIT_TX_BUF_CHECK_ADDR);
 	if (err)
-		return err;
+		goto cleanup_rx_queues;
 
 	err = airoha_npu_wlan_set_reserved_memory(npu, 0, "pkt",
 			WLAN_FUNC_SET_WAIT_PKT_BUF_ADDR);
 	if (err)
-		return err;
+		goto cleanup_rx_queues;
 
 	err = airoha_npu_wlan_set_reserved_memory(npu, 0, "tx-pkt",
 			WLAN_FUNC_SET_WAIT_TX_PKT_BUF_ADDR);
 	if (err)
-		return err;
+		goto cleanup_rx_queues;
 
-	return airoha_npu_wlan_send_msg(npu, 0,
-					WLAN_FUNC_SET_WAIT_IS_FORCE_TO_CPU,
-					0);
+	err = airoha_npu_wlan_send_msg(npu, 0,
+				       WLAN_FUNC_SET_WAIT_IS_FORCE_TO_CPU, 0);
+	if (err)
+		goto cleanup_rx_queues;
+
+	return 0;
+
+cleanup_rx_queues:
+	airoha_npu_cleanup_rx_queues(npu);
+
+	return err;
 }
 
 static void airoha_npu_wlan_set_irq_mask(struct airoha_npu *npu, int q)
@@ -775,6 +983,7 @@ static int airoha_npu_probe(struct platform_device *pdev)
 		airoha_npu_wlan_set_rx_ring_for_txdone;
 	npu->ops.wlan_get_npu_support_map =
 		airoha_npu_wlan_get_npu_support_map;
+	npu->ops.wlan_rx_dequeue = airoha_npu_rx_dequeue;
 	npu->ops.wlan_set_irq_mask = airoha_npu_wlan_set_irq_mask;
 	npu->ops.wlan_get_irq = airoha_npu_wlan_get_irq;
 	npu->ops.wlan_irq_enable = airoha_npu_wlan_irq_enable;
@@ -870,6 +1079,8 @@ static void airoha_npu_remove(struct platform_device *pdev)
 
 	for (i = 0; i < ARRAY_SIZE(npu->cores); i++)
 		cancel_work_sync(&npu->cores[i].wdt_work);
+
+	airoha_npu_cleanup_rx_queues(npu);
 }
 
 static struct platform_driver airoha_npu_driver = {
