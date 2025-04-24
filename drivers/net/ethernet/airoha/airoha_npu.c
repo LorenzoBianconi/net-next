@@ -47,6 +47,11 @@
 #define REG_IRQ_RXDONE(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 2) + 0x034)
 #define NPU_IRQ_RX_MASK(_n)		((_n) == 1 ? BIT(17) : BIT(16))
 
+#define REG_TX_BASE(_n)			(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x080)
+#define REG_TX_DSCP_NUM(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x084)
+#define REG_TX_DMA_IDX(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x088)
+#define REG_TX_CPU_IDX(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x08c)
+
 #define REG_RX_BASE(_n)			(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x180)
 #define REG_RX_DSCP_NUM(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x184)
 #define REG_RX_DMA_IDX(_n)		(NPU_WLAN_BASE_ADDR + ((_n) << 4) + 0x188)
@@ -209,6 +214,13 @@ struct wlan_mbox_data {
 		} stats;
 	};
 };
+
+struct npu_tx_dma_desc {
+	u32 ctrl;
+	u32 addr;
+	u64 rsv;
+	u8 data[192];
+} __packed;
 
 static int airoha_npu_send_msg(struct airoha_npu *npu, int func_id,
 			       void *p, int size)
@@ -795,6 +807,26 @@ static void airoha_npu_cleanup_rx_queues(struct airoha_npu *npu)
 static int airoha_npu_wlan_init_txrx_queues(struct airoha_npu *npu)
 {
 	int i, err = 0;
+
+	for (i = 0; i < ARRAY_SIZE(npu->tx_desc); i++) {
+		int ndesc = i ? NPU_TX1_DESC_NUM : NPU_TX0_DESC_NUM;
+		struct airoha_npu_tx_dma_desc *tx_desc;
+		dma_addr_t dma_addr;
+		int qid = 2 + i;
+
+		tx_desc = dmam_alloc_coherent(npu->dev,
+					      ndesc * sizeof(*tx_desc),
+					      &dma_addr, GFP_KERNEL);
+		if (!tx_desc)
+			return -ENOMEM;
+
+		npu->tx_desc[i] = tx_desc;
+
+		regmap_write(npu->regmap, REG_TX_DSCP_NUM(qid), ndesc);
+		regmap_write(npu->regmap, REG_TX_CPU_IDX(qid), 0);
+		regmap_write(npu->regmap, REG_TX_DMA_IDX(qid), 0);
+		regmap_write(npu->regmap, REG_TX_BASE(qid), dma_addr);
+	}
 
 	for (i = 0; i < ARRAY_SIZE(npu->q_rx); i++) {
 		err = airoha_npu_wlan_init_rx_queue(npu, &npu->q_rx[i]);

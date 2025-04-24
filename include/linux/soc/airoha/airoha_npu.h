@@ -12,6 +12,9 @@
 #define NPU_NUM_RXQ		2
 #define NPU_RX0_DESC_NUM	512
 #define NPU_RX1_DESC_NUM	512
+#define NPU_NUM_TXQ		2
+#define NPU_TX0_DESC_NUM	1024
+#define NPU_TX1_DESC_NUM	1024
 
 /* CTRL */
 #define NPU_RX_DMA_DESC_LAST_MASK	BIT(29)
@@ -80,6 +83,7 @@ struct airoha_npu {
 
 	int irqs[NPU_NUM_IRQ];
 
+	void *tx_desc[NPU_NUM_TXQ];
 	struct airoha_npu_queue q_rx[NPU_NUM_RXQ];
 
 	struct {
