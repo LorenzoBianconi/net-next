@@ -11,6 +11,7 @@
 #include <net/dst_metadata.h>
 #include <net/page_pool/helpers.h>
 #include <net/pkt_cls.h>
+#include <net/tcp.h>
 #include <uapi/linux/ppp_defs.h>
 
 #include "airoha_regs.h"
@@ -624,9 +625,87 @@ static int airoha_qdma_get_gdm_port(struct airoha_eth *eth,
 	return port >= ARRAY_SIZE(eth->ports) ? -EINVAL : port;
 }
 
+static bool airoha_qdma_is_lro_rx_queue(struct airoha_queue *q)
+{
+	struct airoha_qdma *qdma = q->qdma;
+	int qid = q - &qdma->q_rx[0];
+
+	/* EN7581 SoC supports at most 8 LRO rx queues */
+	BUILD_BUG_ON(hweight32(AIROHA_RXQ_LRO_EN_MASK) >
+		     AIROHA_MAX_NUM_LRO_QUEUES);
+
+	return !!(AIROHA_RXQ_LRO_EN_MASK & BIT(qid));
+}
+
+static int airoha_qdma_lro_rx_process(struct airoha_queue *q,
+				      struct airoha_qdma_desc *desc)
+{
+	u32 msg1 = le32_to_cpu(desc->msg1), msg2 = le32_to_cpu(desc->msg2);
+	u32 th_off, tcp_ack_seq, msg3 = le32_to_cpu(desc->msg3);
+	bool ipv4 = FIELD_GET(QDMA_ETH_RXMSG_IP4_MASK, msg1);
+	bool ipv6 = FIELD_GET(QDMA_ETH_RXMSG_IP6_MASK, msg1);
+	struct sk_buff *skb = q->skb;
+	u16 tcp_win, l2_len;
+	struct tcphdr *th;
+
+	if (FIELD_GET(QDMA_ETH_RXMSG_AGG_COUNT_MASK, msg2) <= 1)
+		return 0;
+
+	if (!ipv4 && !ipv6)
+		return -EOPNOTSUPP;
+
+	l2_len = FIELD_GET(QDMA_ETH_RXMSG_L2_LEN_MASK, msg2);
+	if (ipv4) {
+		u16 agg_len = FIELD_GET(QDMA_ETH_RXMSG_AGG_LEN_MASK, msg3);
+		struct iphdr *iph = (struct iphdr *)(skb->data + l2_len);
+
+		if (iph->protocol != IPPROTO_TCP)
+			return -EOPNOTSUPP;
+
+		iph->tot_len = cpu_to_be16(agg_len);
+		iph->check = 0;
+		iph->check = ip_fast_csum((void *)iph, iph->ihl);
+		th_off = l2_len + (iph->ihl << 2);
+	} else {
+		struct ipv6hdr *ip6h = (struct ipv6hdr *)(skb->data + l2_len);
+		u32 len, desc_ctrl = le32_to_cpu(desc->ctrl);
+
+		if (ip6h->nexthdr != NEXTHDR_TCP)
+			return -EOPNOTSUPP;
+
+		len = FIELD_GET(QDMA_DESC_LEN_MASK, desc_ctrl);
+		ip6h->payload_len = cpu_to_be16(len - l2_len - sizeof(*ip6h));
+		th_off = l2_len + sizeof(*ip6h);
+	}
+
+	tcp_win = FIELD_GET(QDMA_ETH_RXMSG_TCP_WIN_MASK, msg3);
+	tcp_ack_seq = le32_to_cpu(desc->data);
+
+	th = (struct tcphdr *)(skb->data + th_off);
+	th->ack_seq = cpu_to_be32(tcp_ack_seq);
+	th->window = cpu_to_be16(tcp_win);
+
+	/* check tcp timestamp option */
+	if (th->doff == sizeof(*th) + TCPOLEN_TSTAMP_ALIGNED) {
+		__be32 *topt = (__be32 *)(th + 1);
+
+		if (*topt == cpu_to_be32((TCPOPT_NOP << 24) |
+					 (TCPOPT_NOP << 16) |
+					 (TCPOPT_TIMESTAMP << 8) |
+					 TCPOLEN_TIMESTAMP)) {
+			u32 tcp_ts_reply = le32_to_cpu(desc->tcp_ts_reply);
+
+			put_unaligned_be32(tcp_ts_reply, topt + 2);
+		}
+	}
+
+	return 0;
+}
+
 static int airoha_qdma_rx_process(struct airoha_queue *q, int budget)
 {
 	enum dma_data_direction dir = page_pool_get_dma_dir(q->page_pool);
+	bool lro_queue = airoha_qdma_is_lro_rx_queue(q);
 	struct airoha_qdma *qdma = q->qdma;
 	struct airoha_eth *eth = qdma->eth;
 	int qid = q - &qdma->q_rx[0];
@@ -676,9 +755,14 @@ static int airoha_qdma_rx_process(struct airoha_queue *q, int budget)
 			__skb_put(q->skb, len);
 			skb_mark_for_recycle(q->skb);
 			q->skb->dev = port->dev;
-			q->skb->protocol = eth_type_trans(q->skb, port->dev);
 			q->skb->ip_summed = CHECKSUM_UNNECESSARY;
 			skb_record_rx_queue(q->skb, qid);
+
+			if (lro_queue && (port->dev->features & NETIF_F_LRO) &&
+			    airoha_qdma_lro_rx_process(q, desc) < 0)
+				goto free_frag;
+
+			q->skb->protocol = eth_type_trans(q->skb, port->dev);
 		} else { /* scattered frame */
 			struct skb_shared_info *shinfo = skb_shinfo(q->skb);
 			int nr_frags = shinfo->nr_frags;
