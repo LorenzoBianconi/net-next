@@ -446,6 +446,40 @@ static void airoha_fe_crsn_qsel_init(struct airoha_eth *eth)
 				 CDM_CRSN_QSEL_Q1));
 }
 
+static void airoha_fe_init_lro_rx_queue(struct airoha_eth *eth, int qdma_id,
+					int lro_index, int qid, int nbuf,
+					int buf_size)
+{
+	airoha_fe_rmw(eth, REG_CDM_LRO_LIMIT(qdma_id),
+		      CDM_LRO_AGG_NUM_MASK | CDM_LRO_AGG_SIZE_MASK,
+		      FIELD_PREP(CDM_LRO_AGG_NUM_MASK, nbuf) |
+		      FIELD_PREP(CDM_LRO_AGG_SIZE_MASK, buf_size));
+	airoha_fe_rmw(eth, REG_CDM_LRO_AGE_TIME(qdma_id),
+		      CDM_LRO_AGE_TIME_MASK | CDM_LRO_AGG_TIME_MASK,
+		      FIELD_PREP(CDM_LRO_AGE_TIME_MASK,
+				 AIROHA_RXQ_LRO_MAX_AGE_TIME) |
+		      FIELD_PREP(CDM_LRO_AGG_TIME_MASK,
+				 AIROHA_RXQ_LRO_MAX_AGG_TIME));
+	airoha_fe_rmw(eth, REG_CDM_LRO_RXQ(qdma_id, lro_index),
+		      LRO_RXQ_MASK(lro_index),
+		      qid << __ffs(LRO_RXQ_MASK(lro_index)));
+	airoha_fe_set(eth, REG_CDM_LRO_EN(qdma_id), BIT(lro_index));
+}
+
+static void airoha_fe_lro_disable(struct airoha_eth *eth, int qdma_id)
+{
+	int i;
+
+	airoha_fe_clear(eth, REG_CDM_LRO_LIMIT(qdma_id),
+			CDM_LRO_AGG_NUM_MASK | CDM_LRO_AGG_SIZE_MASK);
+	airoha_fe_clear(eth, REG_CDM_LRO_AGE_TIME(qdma_id),
+			CDM_LRO_AGE_TIME_MASK | CDM_LRO_AGG_TIME_MASK);
+	airoha_fe_clear(eth, REG_CDM_LRO_EN(qdma_id), LRO_RXQ_EN_MASK);
+	for (i = 0; i < AIROHA_MAX_NUM_LRO_QUEUES; i++)
+		airoha_fe_clear(eth, REG_CDM_LRO_RXQ(qdma_id, i),
+				LRO_RXQ_MASK(i));
+}
+
 static int airoha_fe_init(struct airoha_eth *eth)
 {
 	airoha_fe_maccr_init(eth);
@@ -844,14 +878,16 @@ static int airoha_qdma_rx_napi_poll(struct napi_struct *napi, int budget)
 	return done;
 }
 
-static int airoha_qdma_init_rx_pp(struct airoha_queue *q)
+static int airoha_qdma_init_rx_pp(struct airoha_queue *q,
+				  bool lro_queue)
 {
+	int pp_order = lro_queue ? 5 : 0;
 	const struct page_pool_params pp_params = {
-		.order = 0,
-		.pool_size = 256,
+		.order = pp_order,
+		.pool_size = 256 >> pp_order,
 		.flags = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV,
 		.dma_dir = DMA_FROM_DEVICE,
-		.max_len = PAGE_SIZE,
+		.max_len = PAGE_SIZE << pp_order,
 		.nid = NUMA_NO_NODE,
 		.dev = q->qdma->eth->dev,
 		.napi = &q->napi,
@@ -865,7 +901,7 @@ static int airoha_qdma_init_rx_pp(struct airoha_queue *q)
 		return err;
 	}
 
-	q->buf_size = PAGE_SIZE / 2;
+	q->buf_size = pp_params.max_len / (2 * (1 + lro_queue));
 
 	return 0;
 }
@@ -885,7 +921,8 @@ static int airoha_qdma_init_rx_queue(struct airoha_queue *q,
 	if (!q->entry)
 		return -ENOMEM;
 
-	err = airoha_qdma_init_rx_pp(q);
+	/* Disable LRO by default */
+	err = airoha_qdma_init_rx_pp(q, false);
 	if (err)
 		return err;
 
@@ -1965,6 +2002,77 @@ static u32 airoha_get_dsa_tag(struct sk_buff *skb, struct net_device *dev)
 #endif
 }
 
+static int airoha_dev_set_features(struct net_device *dev,
+				   netdev_features_t features)
+{
+	netdev_features_t diff = dev->features ^ features;
+	struct airoha_gdm_port *port = netdev_priv(dev);
+	struct airoha_qdma *qdma = port->qdma;
+	struct airoha_eth *eth = qdma->eth;
+	int qdma_id = qdma - &eth->qdma[0];
+	int err, i, lro_index = 0;
+	struct airoha_queue *q;
+	u32 status;
+
+	if (!(diff & NETIF_F_LRO))
+		return 0;
+
+	/* reconfigure rx queues */
+	airoha_qdma_clear(qdma, REG_QDMA_GLOBAL_CFG,
+			  GLOBAL_CFG_RX_DMA_EN_MASK);
+	airoha_qdma_clear(qdma, REG_LMGR_INIT_CFG, LMGR_INIT_START);
+	/* wait for DMA to complete */
+	msleep(50);
+
+	for (i = 0; i < ARRAY_SIZE(qdma->q_rx); i++) {
+		q = &qdma->q_rx[i];
+		if (!q->ndesc)
+			continue;
+
+		napi_disable(&q->napi);
+		if (airoha_qdma_is_lro_rx_queue(q))
+			airoha_qdma_cleanup_deinit_rx_queue(q);
+	}
+
+	/* reset LRO configuration */
+	airoha_fe_lro_disable(eth, qdma_id);
+
+	for (i = 0; i < ARRAY_SIZE(qdma->q_rx); i++) {
+		bool lro_queue;
+
+		q = &qdma->q_rx[i];
+		if (!q->ndesc)
+			continue;
+
+		lro_queue = airoha_qdma_is_lro_rx_queue(q);
+		if (!lro_queue)
+			goto napi_enable;
+
+		/* recreate the page_pool according to the LRO configuration */
+		lro_queue = lro_queue && (features & NETIF_F_LRO);
+		err = airoha_qdma_init_rx_pp(q, lro_queue);
+		if (err)
+			return err;
+
+		airoha_qdma_fill_rx_queue(q);
+		airoha_fe_init_lro_rx_queue(eth, qdma_id, lro_index, i,
+					    q->page_pool->p.pool_size,
+					    q->buf_size);
+		lro_index++;
+napi_enable:
+		napi_enable(&q->napi);
+		napi_schedule(&q->napi);
+	}
+
+	airoha_qdma_set(qdma, REG_QDMA_GLOBAL_CFG, GLOBAL_CFG_RX_DMA_EN_MASK);
+	airoha_qdma_set(qdma, REG_LMGR_INIT_CFG, LMGR_INIT_START);
+
+	return read_poll_timeout(airoha_qdma_rr, status,
+				 !(status & LMGR_INIT_START), USEC_PER_MSEC,
+				 30 * USEC_PER_MSEC, true, qdma,
+				 REG_LMGR_INIT_CFG);
+}
+
 static netdev_tx_t airoha_dev_xmit(struct sk_buff *skb,
 				   struct net_device *dev)
 {
@@ -2846,6 +2954,7 @@ static const struct net_device_ops airoha_netdev_ops = {
 	.ndo_stop		= airoha_dev_stop,
 	.ndo_change_mtu		= airoha_dev_change_mtu,
 	.ndo_select_queue	= airoha_dev_select_queue,
+	.ndo_set_features	= airoha_dev_set_features,
 	.ndo_start_xmit		= airoha_dev_xmit,
 	.ndo_get_stats64        = airoha_dev_get_stats64,
 	.ndo_set_mac_address	= airoha_dev_set_macaddr,
