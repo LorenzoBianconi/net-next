@@ -820,7 +820,9 @@ static int airoha_qdma_init_rx_queue(struct airoha_queue *q,
 
 static void airoha_qdma_cleanup_rx_queue(struct airoha_queue *q)
 {
-	struct airoha_eth *eth = q->qdma->eth;
+	struct airoha_qdma *qdma = q->qdma;
+	struct airoha_eth *eth = qdma->eth;
+	int qid = q - &qdma->q_rx[0];
 
 	while (q->queued) {
 		struct airoha_queue_entry *e = &q->entry[q->tail];
@@ -832,6 +834,18 @@ static void airoha_qdma_cleanup_rx_queue(struct airoha_queue *q)
 		q->tail = (q->tail + 1) % q->ndesc;
 		q->queued--;
 	}
+
+	q->head = 0;
+	q->tail = q->head;
+	airoha_qdma_rmw(qdma, REG_RX_DMA_IDX(qid), RX_RING_DMA_IDX_MASK,
+			FIELD_PREP(RX_RING_DMA_IDX_MASK, q->tail));
+}
+
+static void airoha_qdma_cleanup_deinit_rx_queue(struct airoha_queue *q)
+{
+	airoha_qdma_cleanup_rx_queue(q);
+	if (q->page_pool)
+		page_pool_destroy(q->page_pool);
 }
 
 static int airoha_qdma_init_rx(struct airoha_qdma *qdma)
@@ -1417,9 +1431,7 @@ static void airoha_hw_cleanup(struct airoha_qdma *qdma)
 			continue;
 
 		netif_napi_del(&qdma->q_rx[i].napi);
-		airoha_qdma_cleanup_rx_queue(&qdma->q_rx[i]);
-		if (qdma->q_rx[i].page_pool)
-			page_pool_destroy(qdma->q_rx[i].page_pool);
+		airoha_qdma_cleanup_deinit_rx_queue(&qdma->q_rx[i]);
 	}
 
 	for (i = 0; i < ARRAY_SIZE(qdma->q_tx_irq); i++)
