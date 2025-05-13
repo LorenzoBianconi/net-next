@@ -760,8 +760,7 @@ static int airoha_qdma_rx_napi_poll(struct napi_struct *napi, int budget)
 	return done;
 }
 
-static int airoha_qdma_init_rx_queue(struct airoha_queue *q,
-				     struct airoha_qdma *qdma, int ndesc)
+static int airoha_qdma_init_rx_pp(struct airoha_queue *q)
 {
 	const struct page_pool_params pp_params = {
 		.order = 0,
@@ -770,21 +769,9 @@ static int airoha_qdma_init_rx_queue(struct airoha_queue *q,
 		.dma_dir = DMA_FROM_DEVICE,
 		.max_len = PAGE_SIZE,
 		.nid = NUMA_NO_NODE,
-		.dev = qdma->eth->dev,
+		.dev = q->qdma->eth->dev,
 		.napi = &q->napi,
 	};
-	struct airoha_eth *eth = qdma->eth;
-	int qid = q - &qdma->q_rx[0], thr;
-	dma_addr_t dma_addr;
-
-	q->buf_size = PAGE_SIZE / 2;
-	q->ndesc = ndesc;
-	q->qdma = qdma;
-
-	q->entry = devm_kzalloc(eth->dev, q->ndesc * sizeof(*q->entry),
-				GFP_KERNEL);
-	if (!q->entry)
-		return -ENOMEM;
 
 	q->page_pool = page_pool_create(&pp_params);
 	if (IS_ERR(q->page_pool)) {
@@ -793,6 +780,30 @@ static int airoha_qdma_init_rx_queue(struct airoha_queue *q,
 		q->page_pool = NULL;
 		return err;
 	}
+
+	q->buf_size = PAGE_SIZE / 2;
+
+	return 0;
+}
+
+static int airoha_qdma_init_rx_queue(struct airoha_queue *q,
+				     struct airoha_qdma *qdma, int ndesc)
+{
+	int err, qid = q - &qdma->q_rx[0], thr;
+	struct airoha_eth *eth = qdma->eth;
+	dma_addr_t dma_addr;
+
+	q->ndesc = ndesc;
+	q->qdma = qdma;
+
+	q->entry = devm_kzalloc(eth->dev, q->ndesc * sizeof(*q->entry),
+				GFP_KERNEL);
+	if (!q->entry)
+		return -ENOMEM;
+
+	err = airoha_qdma_init_rx_pp(q);
+	if (err)
+		return err;
 
 	q->desc = dmam_alloc_coherent(eth->dev, q->ndesc * sizeof(*q->desc),
 				      &dma_addr, GFP_KERNEL);
