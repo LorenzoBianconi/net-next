@@ -14,7 +14,7 @@
 #include "airoha_regs.h"
 #include "airoha_eth.h"
 
-static DEFINE_MUTEX(flow_offload_mutex);
+static DEFINE_SPINLOCK(flow_offload_lock);
 static DEFINE_SPINLOCK(ppe_lock);
 
 static const struct rhashtable_params airoha_flow_table_params = {
@@ -1051,7 +1051,7 @@ static int airoha_ppe_flow_offload_replace(struct airoha_gdm_port *port,
 			return err;
 	}
 
-	e = kzalloc(sizeof(*e), GFP_KERNEL);
+	e = kzalloc(sizeof(*e), GFP_ATOMIC);
 	if (!e)
 		return -ENOMEM;
 
@@ -1153,18 +1153,27 @@ static int airoha_ppe_flow_offload_stats(struct airoha_gdm_port *port,
 static int airoha_ppe_flow_offload_cmd(struct airoha_gdm_port *port,
 				       struct flow_cls_offload *f)
 {
+	int err = -EOPNOTSUPP;
+
+	spin_lock(&flow_offload_lock);
+
 	switch (f->command) {
 	case FLOW_CLS_REPLACE:
-		return airoha_ppe_flow_offload_replace(port, f);
+		err = airoha_ppe_flow_offload_replace(port, f);
+		break;
 	case FLOW_CLS_DESTROY:
-		return airoha_ppe_flow_offload_destroy(port, f);
+		err = airoha_ppe_flow_offload_destroy(port, f);
+		break;
 	case FLOW_CLS_STATS:
-		return airoha_ppe_flow_offload_stats(port, f);
+		err = airoha_ppe_flow_offload_stats(port, f);
+		break;
 	default:
 		break;
 	}
 
-	return -EOPNOTSUPP;
+	spin_unlock(&flow_offload_lock);
+
+	return err;
 }
 
 static int airoha_ppe_flush_sram_entries(struct airoha_ppe *ppe,
@@ -1198,11 +1207,17 @@ static struct airoha_npu *airoha_ppe_npu_get(struct airoha_eth *eth)
 
 static int airoha_ppe_offload_setup(struct airoha_eth *eth)
 {
-	struct airoha_npu *npu = airoha_ppe_npu_get(eth);
+	struct airoha_npu *npu;
 	int err;
 
-	if (IS_ERR(npu))
-		return PTR_ERR(npu);
+	if (test_and_set_bit(DEV_STATE_NPU_LOADED, &eth->state))
+		return 0;
+
+	npu = airoha_ppe_npu_get(eth);
+	if (IS_ERR(npu)) {
+		err = PTR_ERR(npu);
+		goto clear_state;
+	}
 
 	err = npu->ops.ppe_init(npu);
 	if (err)
@@ -1222,6 +1237,8 @@ static int airoha_ppe_offload_setup(struct airoha_eth *eth)
 
 error_npu_put:
 	airoha_npu_put(npu);
+clear_state:
+	clear_bit(DEV_STATE_NPU_LOADED, &eth->state);
 
 	return err;
 }
@@ -1231,16 +1248,11 @@ int airoha_ppe_setup_tc_block_cb(struct net_device *dev, void *type_data)
 	struct airoha_gdm_port *port = netdev_priv(dev);
 	struct flow_cls_offload *cls = type_data;
 	struct airoha_eth *eth = port->qdma->eth;
-	int err = 0;
+	int err;
 
-	mutex_lock(&flow_offload_mutex);
-
-	if (!eth->npu)
-		err = airoha_ppe_offload_setup(eth);
+	err = airoha_ppe_offload_setup(eth);
 	if (!err)
 		err = airoha_ppe_flow_offload_cmd(port, cls);
-
-	mutex_unlock(&flow_offload_mutex);
 
 	return err;
 }
