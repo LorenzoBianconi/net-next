@@ -240,6 +240,34 @@ $defs:
                       - 2500base-x
                       - sgmii
 
+  mt7988-dsa-port:
+    patternProperties:
+      "^(ethernet-)?ports$":
+        patternProperties:
+          "^(ethernet-)?port@[0-6]$":
+            if:
+              required: [ ethernet ]
+            then:
+              if:
+                properties:
+                  reg:
+                    const: 5
+              then:
+                properties:
+                  phy-mode:
+                    enum:
+                      - gmii
+                      - mii
+                      - rgmii
+                      - internal
+              else:
+                properties:
+                  phy-mode:
+                    enum:
+                      - rgmii
+                      - trgmii
+                      - internal
+
 allOf:
   - $ref: dsa.yaml#/$defs/ethernet-ports
   - if:
@@ -292,7 +320,7 @@ allOf:
             - mediatek,mt7988-switch
             - airoha,en7581-switch
     then:
-      $ref: "#/$defs/mt7530-dsa-port"
+      $ref: "#/$defs/mt7988-dsa-port"
       properties:
         gpio-controller: false
         mediatek,mcm: false
