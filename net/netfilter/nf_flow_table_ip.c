@@ -15,6 +15,7 @@
 #include <net/neighbour.h>
 #include <net/netfilter/nf_flow_table.h>
 #include <net/netfilter/nf_conntrack_acct.h>
+#include <net/protocol.h>
 /* For layer 4 checksum field offset. */
 #include <linux/tcp.h>
 #include <linux/udp.h>
@@ -296,6 +297,47 @@ static bool nf_flow_ip4_encap_proto(struct sk_buff *skb, u16 *size)
 	return iph->protocol == IPPROTO_IPIP;
 }
 
+static bool nf_flow_ip6_encap_proto(struct sk_buff *skb, u16 *size)
+{
+	const struct inet6_protocol *ipprot;
+	struct ipv6hdr *ip6h;
+	bool ret = false;
+
+	if (!pskb_may_pull(skb, sizeof(*ip6h)))
+		return false;
+
+	ip6h = (struct ipv6hdr *)skb_network_header(skb);
+	if (ip6h->hop_limit <= 1)
+		return false;
+
+	/* Initialize default values for extension headers parsing */
+	skb->transport_header = skb->network_header + sizeof(*ip6h);
+	IP6CB(skb)->nhoff = offsetof(struct ipv6hdr, nexthdr);
+
+	do {
+		unsigned int nhoff = IP6CB(skb)->nhoff;
+		u8 nexthdr;
+
+		if (!pskb_pull(skb, skb_transport_offset(skb)))
+			break;
+
+		nexthdr = skb_network_header(skb)[nhoff];
+		ipprot = rcu_dereference(inet6_protos[nexthdr]);
+		if (!ipprot)
+			break;
+
+		if (ipprot->flags & INET6_PROTO_FINAL) {
+			ret = nexthdr == IPPROTO_IPV6;
+			break;
+		}
+	} while (ipprot->handler(skb) > 0);
+
+	*size = skb->transport_header - skb->network_header;
+	skb_push(skb, *size);
+
+	return ret;
+}
+
 static bool nf_flow_skb_encap_protocol(struct sk_buff *skb, __be16 proto,
 				       u32 *offset)
 {
@@ -306,6 +348,10 @@ static bool nf_flow_skb_encap_protocol(struct sk_buff *skb, __be16 proto,
 	switch (skb->protocol) {
 	case htons(ETH_P_IP):
 		if (nf_flow_ip4_encap_proto(skb, &size))
+			*offset += size;
+		return true;
+	case htons(ETH_P_IPV6):
+		if (nf_flow_ip6_encap_proto(skb, &size))
 			*offset += size;
 		return true;
 	case htons(ETH_P_8021Q):
@@ -330,11 +376,31 @@ static bool nf_flow_skb_encap_protocol(struct sk_buff *skb, __be16 proto,
 	return false;
 }
 
+static void nf_flow_ip_encap_pop(struct sk_buff *skb)
+{
+	u16 size;
+
+	switch (skb->protocol) {
+	case htons(ETH_P_IP):
+		if (!nf_flow_ip4_encap_proto(skb, &size))
+			return;
+		break;
+	case htons(ETH_P_IPV6):
+		if (!nf_flow_ip6_encap_proto(skb, &size))
+			return;
+		break;
+	default:
+		return;
+	}
+
+	skb_pull(skb, size);
+	skb_reset_network_header(skb);
+}
+
 static void nf_flow_encap_pop(struct sk_buff *skb,
 			      struct flow_offload_tuple_rhash *tuplehash)
 {
 	struct vlan_hdr *vlan_hdr;
-	u16 size;
 	int i;
 
 	for (i = 0; i < tuplehash->tuple.encap_num; i++) {
@@ -357,11 +423,7 @@ static void nf_flow_encap_pop(struct sk_buff *skb,
 		}
 	}
 
-	if (skb->protocol == htons(ETH_P_IP) &&
-	    nf_flow_ip4_encap_proto(skb, &size)) {
-		skb_pull(skb, size);
-		skb_reset_network_header(skb);
-	}
+	nf_flow_ip_encap_pop(skb);
 }
 
 static unsigned int nf_flow_queue_xmit(struct net *net, struct sk_buff *skb,
@@ -729,8 +791,7 @@ nf_flow_offload_ipv6_lookup(struct nf_flowtable_ctx *ctx,
 {
 	struct flow_offload_tuple tuple = {};
 
-	if (skb->protocol != htons(ETH_P_IPV6) &&
-	    !nf_flow_skb_encap_protocol(skb, htons(ETH_P_IPV6), &ctx->offset))
+	if (!nf_flow_skb_encap_protocol(skb, htons(ETH_P_IPV6), &ctx->offset))
 		return NULL;
 
 	if (nf_flow_tuple_ipv6(ctx, skb, &tuple) < 0)
