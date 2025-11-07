@@ -437,6 +437,9 @@ static int nf_flow_offload_forward(struct nf_flowtable_ctx *ctx,
 	flow = container_of(tuplehash, struct flow_offload, tuplehash[dir]);
 
 	mtu = flow->tuplehash[dir].tuple.mtu + ctx->offset;
+	if (flow->tuplehash[!dir].tuple.tun_num)
+		mtu -= sizeof(*iph);
+
 	if (unlikely(nf_flow_exceeds_mtu(skb, mtu)))
 		return 0;
 
@@ -508,7 +511,60 @@ static int nf_flow_pppoe_push(struct sk_buff *skb, u16 id)
 	return 0;
 }
 
-static int nf_flow_encap_push(struct sk_buff *skb, struct flow_offload_tuple *tuple)
+static int nf_flow_tunnel_ipip_push(struct net *net, struct sk_buff *skb,
+				    struct flow_offload_tuple *tuple)
+{
+	struct iphdr *iph = (struct iphdr *)skb_network_header(skb);
+	struct rtable *rt = dst_rtable(tuple->dst_cache);
+	__be16	frag_off = iph->frag_off;
+	u32 headroom = sizeof(*iph);
+	u8 tos = iph->tos, ttl = iph->ttl;
+	int err;
+
+	err = iptunnel_handle_offloads(skb, SKB_GSO_IPXIP4);
+	if (err)
+		return err;
+
+	skb_set_inner_ipproto(skb, IPPROTO_IPIP);
+	headroom += LL_RESERVED_SPACE(rt->dst.dev) + rt->dst.header_len;
+	err = skb_cow_head(skb, headroom);
+	if (err)
+		return err;
+
+	skb_scrub_packet(skb, true);
+	skb_clear_hash_if_not_l4(skb);
+
+	/* Push down and install the IP header. */
+	skb_push(skb, sizeof(*iph));
+	skb_reset_network_header(skb);
+
+	iph = ip_hdr(skb);
+	iph->version	= 4;
+	iph->ihl	= sizeof(*iph) >> 2;
+	iph->frag_off	= ip_mtu_locked(&rt->dst) ? 0 : frag_off;
+	iph->protocol	= tuple->tun.l3_proto;
+	iph->tos	= tos;
+	iph->daddr	= tuple->tun.src_v4.s_addr;
+	iph->saddr	= tuple->tun.dst_v4.s_addr;
+	iph->ttl	= ttl;
+	iph->tot_len	= htons(skb->len);
+	__ip_select_ident(net, iph, skb_shinfo(skb)->gso_segs ?: 1);
+	ip_send_check(iph);
+
+	return 0;
+}
+
+static int nf_flow_tunnel_v4_push(struct net *net, struct sk_buff *skb,
+				  struct flow_offload_tuple *tuple)
+{
+	if (tuple->tun_num)
+		return nf_flow_tunnel_ipip_push(net, skb, tuple);
+
+	return 0;
+}
+
+static int nf_flow_encap_push(struct sk_buff *skb,
+			      struct flow_offload_tuple *tuple)
 {
 	int i;
 
@@ -535,6 +591,7 @@ nf_flow_offload_ip_hook(void *priv, struct sk_buff *skb,
 {
 	struct flow_offload_tuple_rhash *tuplehash;
 	struct nf_flowtable *flow_table = priv;
+	struct flow_offload_tuple *other_tuple;
 	enum flow_offload_tuple_dir dir;
 	struct nf_flowtable_ctx ctx = {
 		.in	= state->in,
@@ -566,9 +623,14 @@ nf_flow_offload_ip_hook(void *priv, struct sk_buff *skb,
 
 	dir = tuplehash->tuple.dir;
 	flow = container_of(tuplehash, struct flow_offload, tuplehash[dir]);
+	other_tuple = &flow->tuplehash[!dir].tuple;
+
+	if (nf_flow_tunnel_v4_push(state->net, skb, other_tuple) < 0)
+		return NF_DROP;
+
 	ip_daddr = ip_hdr(skb)->daddr;
 
-	if (nf_flow_encap_push(skb, &flow->tuplehash[!dir].tuple) < 0)
+	if (nf_flow_encap_push(skb, other_tuple) < 0)
 		return NF_DROP;
 
 	switch (tuplehash->tuple.xmit_type) {
