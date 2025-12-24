@@ -1742,8 +1742,8 @@ static int airoha_dev_init(struct net_device *dev)
 	struct airoha_gdm_port *port = netdev_priv(dev);
 	struct airoha_qdma *qdma = port->qdma;
 	struct airoha_eth *eth = qdma->eth;
-	u32 pse_port, fe_cpu_port;
-	u8 ppe_id;
+	u32 pse_port;
+	int i;
 
 	airoha_set_macaddr(port, dev->dev_addr);
 
@@ -1762,26 +1762,19 @@ static int airoha_dev_init(struct net_device *dev)
 	case AIROHA_GDM2_IDX:
 		if (airoha_ppe_is_enabled(eth, 1)) {
 			/* For PPE2 always use secondary cpu port. */
-			fe_cpu_port = FE_PSE_PORT_CDM2;
 			pse_port = FE_PSE_PORT_PPE2;
 			break;
 		}
 		fallthrough;
-	default: {
-		u8 qdma_id = qdma - &eth->qdma[0];
-
+	default:
 		/* For PPE1 select cpu port according to the running QDMA. */
-		fe_cpu_port = qdma_id ? FE_PSE_PORT_CDM2 : FE_PSE_PORT_CDM1;
 		pse_port = FE_PSE_PORT_PPE1;
 		break;
 	}
-	}
 
 	airoha_set_gdm_port_fwd_cfg(eth, REG_GDM_FWD_CFG(port->id), pse_port);
-	ppe_id = pse_port == FE_PSE_PORT_PPE2 ? 1 : 0;
-	airoha_fe_rmw(eth, REG_PPE_DFT_CPORT0(ppe_id),
-		      DFT_CPORT_MASK(port->id),
-		      fe_cpu_port << __ffs(DFT_CPORT_MASK(port->id)));
+	for (i = 0; i < eth->soc->num_ppe; i++)
+		airoha_ppe_set_def_cport(port, i);
 
 	return 0;
 }
@@ -1884,7 +1877,7 @@ static u32 airoha_get_dsa_tag(struct sk_buff *skb, struct net_device *dev)
 #endif
 }
 
-static int airoha_get_fe_port(struct airoha_gdm_port *port)
+int airoha_get_fe_port(struct airoha_gdm_port *port)
 {
 	struct airoha_qdma *qdma = port->qdma;
 	struct airoha_eth *eth = qdma->eth;
