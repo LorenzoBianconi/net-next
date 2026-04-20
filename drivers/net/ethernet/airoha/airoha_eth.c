@@ -1437,7 +1437,19 @@ static int airoha_qdma_init(struct platform_device *pdev,
 
 static void airoha_qdma_cleanup(struct airoha_qdma *qdma)
 {
-	int i;
+	int i, err;
+	u32 val;
+
+	err = read_poll_timeout(airoha_qdma_rr, val,
+				!(val & GLOBAL_CFG_RX_DMA_BUSY_MASK),
+				USEC_PER_MSEC, 100 * USEC_PER_MSEC, false,
+				qdma, REG_QDMA_GLOBAL_CFG);
+	if (err)
+		dev_warn(qdma->eth->dev,
+			 "Failed waiting RX DMA busy signal: %d\n", err);
+
+	airoha_qdma_clear(qdma, REG_QDMA_GLOBAL_CFG,
+			  GLOBAL_CFG_RX_DMA_EN_MASK);
 
 	for (i = 0; i < ARRAY_SIZE(qdma->q_rx); i++) {
 		if (!qdma->q_rx[i].ndesc)
@@ -1450,6 +1462,17 @@ static void airoha_qdma_cleanup(struct airoha_qdma *qdma)
 			qdma->q_rx[i].page_pool = NULL;
 		}
 	}
+
+	err = read_poll_timeout(airoha_qdma_rr, val,
+				!(val & GLOBAL_CFG_TX_DMA_BUSY_MASK),
+				USEC_PER_MSEC, 100 * USEC_PER_MSEC, false,
+				qdma, REG_QDMA_GLOBAL_CFG);
+	if (err)
+		dev_warn(qdma->eth->dev,
+			 "Failed waiting TX DMA busy signal: %d\n", err);
+
+	airoha_qdma_clear(qdma, REG_QDMA_GLOBAL_CFG,
+			  GLOBAL_CFG_TX_DMA_EN_MASK);
 
 	for (i = 0; i < ARRAY_SIZE(qdma->q_tx_irq); i++) {
 		if (!qdma->q_tx_irq[i].size)
@@ -1717,11 +1740,6 @@ static int airoha_dev_open(struct net_device *dev)
 		      FIELD_PREP(GDM_SHORT_LEN_MASK, 60) |
 		      FIELD_PREP(GDM_LONG_LEN_MASK, len));
 
-	airoha_qdma_set(qdma, REG_QDMA_GLOBAL_CFG,
-			GLOBAL_CFG_TX_DMA_EN_MASK |
-			GLOBAL_CFG_RX_DMA_EN_MASK);
-	atomic_inc(&qdma->users);
-
 	if (port->id == AIROHA_GDM2_IDX &&
 	    airoha_ppe_is_enabled(qdma->eth, 1)) {
 		/* For PPE2 always use secondary cpu port. */
@@ -1737,31 +1755,15 @@ static int airoha_dev_stop(struct net_device *dev)
 {
 	struct airoha_gdm_port *port = netdev_priv(dev);
 	struct airoha_qdma *qdma = port->qdma;
-	int i, err;
+	int i;
 
 	netif_tx_disable(dev);
-	err = airoha_set_vip_for_gdm_port(port, false);
-	if (err)
-		return err;
-
+	airoha_set_vip_for_gdm_port(port, false);
 	for (i = 0; i < ARRAY_SIZE(qdma->q_tx); i++)
 		netdev_tx_reset_subqueue(dev, i);
 
 	airoha_set_gdm_port_fwd_cfg(qdma->eth, REG_GDM_FWD_CFG(port->id),
 				    FE_PSE_PORT_DROP);
-
-	if (atomic_dec_and_test(&qdma->users)) {
-		airoha_qdma_clear(qdma, REG_QDMA_GLOBAL_CFG,
-				  GLOBAL_CFG_TX_DMA_EN_MASK |
-				  GLOBAL_CFG_RX_DMA_EN_MASK);
-
-		for (i = 0; i < ARRAY_SIZE(qdma->q_tx); i++) {
-			if (!qdma->q_tx[i].ndesc)
-				continue;
-
-			airoha_qdma_cleanup_tx_queue(&qdma->q_tx[i]);
-		}
-	}
 
 	return 0;
 }
@@ -3132,6 +3134,11 @@ static int airoha_probe(struct platform_device *pdev)
 	if (err)
 		goto error_napi_stop;
 
+	/* Start TX/RX QDMA engines */
+	for (i = 0; i < ARRAY_SIZE(eth->qdma); i++)
+		airoha_qdma_set(&eth->qdma[i], REG_QDMA_GLOBAL_CFG,
+				GLOBAL_CFG_TX_DMA_EN_MASK |
+				GLOBAL_CFG_RX_DMA_EN_MASK);
 	return 0;
 
 error_napi_stop:
