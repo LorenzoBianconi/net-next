@@ -1997,8 +1997,8 @@ static netdev_tx_t airoha_dev_xmit(struct sk_buff *skb,
 	struct netdev_queue *txq;
 	struct airoha_queue *q;
 	LIST_HEAD(tx_list);
+	dma_addr_t addr;
 	int i = 0, qid;
-	void *data;
 	u16 index;
 	u8 fport;
 
@@ -2051,7 +2051,9 @@ static netdev_tx_t airoha_dev_xmit(struct sk_buff *skb,
 	}
 
 	len = skb_headlen(skb);
-	data = skb->data;
+	addr = dma_map_single(dev->dev.parent, skb->data, len, DMA_TO_DEVICE);
+	if (unlikely(dma_mapping_error(dev->dev.parent, addr)))
+		goto error_unlock;
 
 	e = list_first_entry(&q->tx_list, struct airoha_queue_entry,
 			     list);
@@ -2060,13 +2062,7 @@ static netdev_tx_t airoha_dev_xmit(struct sk_buff *skb,
 	while (true) {
 		struct airoha_qdma_desc *desc = &q->desc[index];
 		skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
-		dma_addr_t addr;
 		u32 val;
-
-		addr = dma_map_single(dev->dev.parent, data, len,
-				      DMA_TO_DEVICE);
-		if (unlikely(dma_mapping_error(dev->dev.parent, addr)))
-			goto error_unmap;
 
 		list_move_tail(&e->list, &tx_list);
 		e->skb = i == nr_frags - 1 ? skb : NULL;
@@ -2091,8 +2087,11 @@ static netdev_tx_t airoha_dev_xmit(struct sk_buff *skb,
 		if (++i == nr_frags)
 			break;
 
-		data = skb_frag_address(frag);
 		len = skb_frag_size(frag);
+		addr = skb_frag_dma_map(dev->dev.parent, frag, 0,
+					len, DMA_TO_DEVICE);
+		if (unlikely(dma_mapping_error(dev->dev.parent, addr)))
+			goto error_unmap;
 	}
 	q->queued += i;
 
@@ -2122,7 +2121,7 @@ error_unmap:
 		e->dma_addr = 0;
 		list_move_tail(&e->list, &q->tx_list);
 	}
-
+error_unlock:
 	spin_unlock_bh(&q->lock);
 error:
 	dev_kfree_skb_any(skb);
