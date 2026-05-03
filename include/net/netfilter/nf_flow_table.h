@@ -118,6 +118,7 @@ struct flow_offload_tunnel {
 	};
 
 	u8	l3_proto;
+	u8	l3_inner_proto;
 };
 
 struct flow_offload_tuple {
