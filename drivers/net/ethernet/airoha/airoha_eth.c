@@ -2586,8 +2586,8 @@ static int airoha_tc_htb_alloc_leaf_queue(struct net_device *dev,
 					  struct tc_htb_qopt_offload *opt)
 {
 	u32 channel = TC_H_MIN(opt->classid) % AIROHA_NUM_QOS_CHANNELS;
+	int err, num_tx_queues = AIROHA_NUM_TX_RING + channel + 1;
 	u32 rate = div_u64(opt->rate, 1000) << 3; /* kbps */
-	int err, num_tx_queues = dev->real_num_tx_queues;
 	struct airoha_gdm_port *port = netdev_priv(dev);
 
 	if (opt->parent_classid != TC_HTB_CLASSID_ROOT) {
@@ -2605,7 +2605,10 @@ static int airoha_tc_htb_alloc_leaf_queue(struct net_device *dev,
 	if (opt->command == TC_HTB_NODE_MODIFY)
 		return 0;
 
-	err = netif_set_real_num_tx_queues(dev, num_tx_queues + 1);
+	if (num_tx_queues <= dev->real_num_tx_queues)
+		goto set_qos_sq_bmap;
+
+	err = netif_set_real_num_tx_queues(dev, num_tx_queues);
 	if (err) {
 		airoha_qdma_set_tx_rate_limit(dev, channel, 0, opt->quantum);
 		NL_SET_ERR_MSG_MOD(opt->extack,
@@ -2613,6 +2616,7 @@ static int airoha_tc_htb_alloc_leaf_queue(struct net_device *dev,
 		return err;
 	}
 
+set_qos_sq_bmap:
 	set_bit(channel, port->qos_sq_bmap);
 	opt->qid = AIROHA_NUM_TX_RING + channel;
 
@@ -2797,10 +2801,15 @@ static int airoha_dev_setup_tc_block(struct net_device *dev,
 static void airoha_tc_remove_htb_queue(struct net_device *dev, int queue)
 {
 	struct airoha_gdm_port *port = netdev_priv(dev);
+	int num_tx_queues = AIROHA_NUM_TX_RING;
 
-	netif_set_real_num_tx_queues(dev, dev->real_num_tx_queues - 1);
 	airoha_qdma_set_tx_rate_limit(dev, queue + 1, 0, 0);
 	clear_bit(queue, port->qos_sq_bmap);
+
+	if (!bitmap_empty(port->qos_sq_bmap, AIROHA_NUM_QOS_CHANNELS))
+		num_tx_queues += find_last_bit(port->qos_sq_bmap,
+					       AIROHA_NUM_QOS_CHANNELS) + 1;
+	netif_set_real_num_tx_queues(dev, num_tx_queues);
 }
 
 static int airoha_tc_htb_delete_leaf_queue(struct net_device *dev,
