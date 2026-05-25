@@ -126,6 +126,8 @@ struct airoha_npu_soc_data {
 #define PPE_TYPE_L2B_IPV4	2
 #define PPE_TYPE_L2B_IPV4_IPV6	3
 
+#define MBOX_MSG_RERTY_NUM	5
+
 struct ppe_mbox_data {
 	u32 func_type;
 	u32 func_id;
@@ -164,34 +166,41 @@ static int airoha_npu_send_msg(struct airoha_npu *npu, int func_id,
 			       void *p, int size)
 {
 	u16 core = 0; /* FIXME */
-	u32 val, offset = core << 4;
-	dma_addr_t dma_addr;
-	int ret;
+	u32 offset = core << 4;
+	int i, ret;
 
-	dma_addr = dma_map_single(npu->dev, p, size, DMA_TO_DEVICE);
-	ret = dma_mapping_error(npu->dev, dma_addr);
-	if (ret)
-		return ret;
+	for (i = 0; i < MBOX_MSG_RERTY_NUM; i++) {
+		dma_addr_t dma_addr;
+		u32 val;
 
-	spin_lock_bh(&npu->cores[core].lock);
+		dma_addr = dma_map_single(npu->dev, p, size, DMA_TO_DEVICE);
+		ret = dma_mapping_error(npu->dev, dma_addr);
+		if (ret)
+			return ret;
 
-	regmap_write(npu->regmap, REG_CR_MBQ0_CTRL(0) + offset, dma_addr);
-	regmap_write(npu->regmap, REG_CR_MBQ0_CTRL(1) + offset, size);
-	regmap_read(npu->regmap, REG_CR_MBQ0_CTRL(2) + offset, &val);
-	regmap_write(npu->regmap, REG_CR_MBQ0_CTRL(2) + offset, val + 1);
-	val = FIELD_PREP(MBOX_MSG_FUNC_ID, func_id) | MBOX_MSG_WAIT_RSP;
-	regmap_write(npu->regmap, REG_CR_MBQ0_CTRL(3) + offset, val);
+		spin_lock_bh(&npu->cores[core].lock);
 
-	ret = regmap_read_poll_timeout_atomic(npu->regmap,
-					      REG_CR_MBQ0_CTRL(3) + offset,
-					      val, (val & MBOX_MSG_DONE),
-					      100, 100 * MSEC_PER_SEC);
-	if (!ret && FIELD_GET(MBOX_MSG_STATUS, val) != NPU_MBOX_SUCCESS)
-		ret = -EINVAL;
+		regmap_write(npu->regmap, REG_CR_MBQ0_CTRL(0) + offset, dma_addr);
+		regmap_write(npu->regmap, REG_CR_MBQ0_CTRL(1) + offset, size);
+		regmap_read(npu->regmap, REG_CR_MBQ0_CTRL(2) + offset, &val);
+		regmap_write(npu->regmap, REG_CR_MBQ0_CTRL(2) + offset, val + 1);
+		val = FIELD_PREP(MBOX_MSG_FUNC_ID, func_id) | MBOX_MSG_WAIT_RSP;
+		regmap_write(npu->regmap, REG_CR_MBQ0_CTRL(3) + offset, val);
 
-	spin_unlock_bh(&npu->cores[core].lock);
+		ret = regmap_read_poll_timeout_atomic(npu->regmap,
+						REG_CR_MBQ0_CTRL(3) + offset,
+						val, (val & MBOX_MSG_DONE),
+						100, 100 * MSEC_PER_SEC);
+		if (!ret && FIELD_GET(MBOX_MSG_STATUS, val) != NPU_MBOX_SUCCESS)
+			ret = -EINVAL;
 
-	dma_unmap_single(npu->dev, dma_addr, size, DMA_TO_DEVICE);
+		spin_unlock_bh(&npu->cores[core].lock);
+
+		dma_unmap_single(npu->dev, dma_addr, size, DMA_TO_DEVICE);
+
+		if (!ret)
+			break;
+	}
 
 	return ret;
 }
