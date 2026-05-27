@@ -97,6 +97,19 @@ void airoha_ppe_set_cpu_port(struct airoha_gdm_dev *dev, u8 ppe_id, u8 fport)
 		      __field_prep(DFT_CPORT_MASK(fport), fe_cpu_port));
 }
 
+void airoha_ppe_set_mtu(struct airoha_gdm_dev *dev)
+{
+	struct airoha_gdm_port *port = dev->port;
+	struct airoha_eth *eth = dev->eth;
+	int ppe_id, index;
+
+	ppe_id = !airoha_is_lan_gdm_dev(dev) && airoha_ppe_is_enabled(eth, 1);
+	index = port->id == AIROHA_GDM4_IDX ? 7 : port->id;
+	airoha_fe_rmw(eth, REG_PPE_MTU(ppe_id, index),
+		      FP_EGRESS_MTU_MASK(index),
+		      __field_prep(FP_EGRESS_MTU_MASK(index), dev->dev->mtu));
+}
+
 static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
 {
 	u32 sram_ppe_num_data_entries = PPE_SRAM_NUM_ENTRIES, sram_num_entries;
@@ -170,19 +183,21 @@ static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
 		for (p = 0; p < ARRAY_SIZE(eth->ports); p++) {
 			struct airoha_gdm_port *port = eth->ports[p];
 
-			airoha_fe_rmw(eth, REG_PPE_MTU(i, p),
-				      FP0_EGRESS_MTU_MASK |
-				      FP1_EGRESS_MTU_MASK,
-				      FIELD_PREP(FP0_EGRESS_MTU_MASK,
-						 AIROHA_MAX_MTU) |
-				      FIELD_PREP(FP1_EGRESS_MTU_MASK,
-						 AIROHA_MAX_MTU));
 			if (!port)
 				continue;
 
 			airoha_ppe_set_cpu_port(port->dev, i,
 						airoha_get_fe_port(port->dev));
 		}
+	}
+
+	for (i = 0; i < ARRAY_SIZE(eth->ports); i++) {
+		struct airoha_gdm_port *port = eth->ports[i];
+
+		if (!port)
+			continue;
+
+		airoha_ppe_set_mtu(port->dev);
 	}
 }
 
