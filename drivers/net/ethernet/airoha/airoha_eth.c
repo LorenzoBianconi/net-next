@@ -1778,14 +1778,14 @@ static void airoha_qdma_start(struct airoha_qdma *qdma)
 	airoha_qdma_set(qdma, REG_QDMA_GLOBAL_CFG,
 			GLOBAL_CFG_TX_DMA_EN_MASK |
 			GLOBAL_CFG_RX_DMA_EN_MASK);
-	atomic_inc(&qdma->users);
+	qdma->users++;
 }
 
 static void airoha_qdma_stop(struct airoha_qdma *qdma)
 {
 	u32 status;
 
-	if (!atomic_dec_and_test(&qdma->users))
+	if (--qdma->users)
 		return;
 
 	airoha_qdma_clear(qdma, REG_QDMA_GLOBAL_CFG,
