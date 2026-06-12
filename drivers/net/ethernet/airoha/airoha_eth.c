@@ -1083,13 +1083,20 @@ static void airoha_qdma_cleanup_tx_queue(struct airoha_queue *q)
 	for (i = 0; i < q->ndesc; i++) {
 		struct airoha_queue_entry *e = &q->entry[i];
 		struct airoha_qdma_desc *desc = &q->desc[i];
+		struct sk_buff *skb = e->skb;
 
 		if (!e->dma_addr)
 			continue;
 
 		dma_unmap_single(eth->dev, e->dma_addr, e->dma_len,
 				 DMA_TO_DEVICE);
-		dev_kfree_skb_any(e->skb);
+		if (skb) {
+			struct netdev_queue *txq;
+
+			txq = skb_get_tx_queue(skb->dev, skb);
+			netdev_tx_completed_queue(txq, 1, skb->len);
+			dev_kfree_skb_any(skb);
+		}
 		e->dma_addr = 0;
 		e->skb = NULL;
 		list_add_tail(&e->list, &q->tx_list);
@@ -1750,12 +1757,9 @@ static int airoha_dev_stop(struct net_device *dev)
 {
 	struct airoha_gdm_port *port = netdev_priv(dev);
 	struct airoha_qdma *qdma = port->qdma;
-	int i;
 
 	netif_tx_disable(dev);
 	airoha_set_vip_for_gdm_port(port, false);
-	for (i = 0; i < dev->num_tx_queues; i++)
-		netdev_tx_reset_subqueue(dev, i);
 
 	airoha_set_gdm_port_fwd_cfg(qdma->eth, REG_GDM_FWD_CFG(port->id),
 				    FE_PSE_PORT_DROP);
