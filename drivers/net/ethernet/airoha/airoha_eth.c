@@ -788,7 +788,7 @@ static struct sk_buff *airoha_qdma_lro_rx_skb(struct airoha_queue *q,
 		return NULL;
 
 	data_off = th_off + (th->doff << 2);
-	if (len < data_off)
+	if (len <= data_off)
 		return NULL;
 
 	tcp_win = FIELD_GET(QDMA_ETH_RXMSG_TCP_WIN_MASK, msg3);
