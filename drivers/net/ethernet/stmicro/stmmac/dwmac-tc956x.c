@@ -348,6 +348,7 @@ static void tc956x_mac_enable(struct tc956x_data *td)
 		tc956x_clock_enable(chip, id, MAC_CLOCK_RMII);
 
 	tc956x_reset_deassert(chip, id, MAC_RESET_MAC);
+	tc956x_mac_configure(td, td->plat->phy_interface, SPEED_100);
 	tc956x_pma_init(td);
 	tc956x_reset_deassert(chip, id, MAC_RESET_XPCS);
 }
