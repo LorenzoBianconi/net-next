@@ -285,9 +285,9 @@ static struct device_node *dev_node_child_gpio(struct device *dev)
 		return NULL;
 
 	/* If it's there, make sure it contains its required properties */
-	if (!of_property_present(np, "gpio-controllerX"))
-		dev_err(dev, "gpio node contains no gpio-contrller property\n");
-	else if (!of_property_present(np, "#gpio-cellsX"))
+	if (!of_property_present(np, "gpio-controller"))
+		dev_err(dev, "gpio node contains no gpio-controller property\n");
+	else if (!of_property_present(np, "#gpio-cells"))
 		dev_err(dev, "gpio node contains no #gpio-cells property\n");
 	else
 		return np;	/* Found a GPIO sub-node */
