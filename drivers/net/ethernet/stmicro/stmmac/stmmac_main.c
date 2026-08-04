@@ -3414,19 +3414,54 @@ static void stmmac_set_rings_length(struct stmmac_priv *priv)
 				       (priv->dma_conf.dma_rx_size - 1), chan);
 }
 
+static u8 stmmac_get_num_tx_queues(struct stmmac_priv *priv)
+{
+	if (priv->qdisc.type == STMMAC_QDISC_ETS)
+		return min(priv->qdisc.num_xmit_queues,
+			   priv->plat->tx_queues_to_use);
+
+	return priv->plat->tx_queues_to_use;
+}
+
+static void stmmac_set_tx_sched(struct stmmac_priv *priv)
+{
+	switch (priv->qdisc.type) {
+	case STMMAC_QDISC_ETS:
+		stmmac_prog_mtl_tx_algorithms(priv, priv->hw,
+					      MTL_TX_ALGORITHM_DWRR);
+		break;
+	case STMMAC_QDISC_MQPRIO:
+		stmmac_prog_mtl_tx_algorithms(priv, priv->hw,
+					      MTL_TX_ALGORITHM_SP);
+		break;
+	default:
+		stmmac_prog_mtl_tx_algorithms(priv, priv->hw,
+					      priv->plat->tx_sched_algorithm);
+		break;
+	}
+}
+
 /**
  *  stmmac_set_tx_queue_weight - Set TX queue weight
  *  @priv: driver private structure
  *  Description: It is used for setting TX queues weight
  */
-static void stmmac_set_tx_queue_weight(struct stmmac_priv *priv)
+void stmmac_set_tx_queue_weight(struct stmmac_priv *priv)
 {
-	u8 tx_queues_count = priv->plat->tx_queues_to_use;
-	u32 weight;
+	struct plat_stmmacenet_data *pdata = priv->plat;
+	u8 tx_queues_count = pdata->tx_queues_to_use;
 	u8 queue;
 
 	for (queue = 0; queue < tx_queues_count; queue++) {
-		weight = priv->plat->tx_queues_cfg[queue].weight;
+		u32 weight;
+
+		if (pdata->tx_queues_cfg[queue].mode_to_use == MTL_QUEUE_AVB)
+			continue;
+
+		if (priv->qdisc.type == STMMAC_QDISC_ETS)
+			weight = priv->qdisc.quanta[queue];
+		else
+			weight = pdata->tx_queues_cfg[queue].weight;
 		stmmac_set_mtl_tx_queue_weight(priv, priv->hw, weight, queue);
 	}
 }
@@ -3571,8 +3606,7 @@ static void stmmac_mtl_configuration(struct stmmac_priv *priv)
 
 	/* Configure MTL TX algorithms */
 	if (tx_queues_count > 1)
-		stmmac_prog_mtl_tx_algorithms(priv, priv->hw,
-				priv->plat->tx_sched_algorithm);
+		stmmac_set_tx_sched(priv);
 
 	/* Configure CBS in AVB TX queues */
 	if (tx_queues_count > 1)
@@ -3738,7 +3772,7 @@ static int stmmac_hw_setup(struct net_device *dev)
 
 	/* Configure real RX and TX queues */
 	netif_set_real_num_rx_queues(dev, priv->plat->rx_queues_to_use);
-	netif_set_real_num_tx_queues(dev, priv->plat->tx_queues_to_use);
+	netif_set_real_num_tx_queues(dev, stmmac_get_num_tx_queues(priv));
 
 	/* Start the ball rolling... */
 	stmmac_start_all_dma(priv);
@@ -5249,13 +5283,14 @@ static int stmmac_xdp_xmit_xdpf(struct stmmac_priv *priv, int queue,
 static int stmmac_xdp_get_tx_queue(struct stmmac_priv *priv,
 				   int cpu)
 {
+	u8 num_tx_queues = stmmac_get_num_tx_queues(priv);
 	int index = cpu;
 
 	if (unlikely(index < 0))
 		index = 0;
 
-	while (index >= priv->plat->tx_queues_to_use)
-		index -= priv->plat->tx_queues_to_use;
+	while (index >= num_tx_queues)
+		index -= num_tx_queues;
 
 	return index;
 }
@@ -6437,6 +6472,8 @@ static int stmmac_setup_tc(struct net_device *ndev, enum tc_setup_type type,
 		return stmmac_tc_setup_taprio(priv, priv, type_data);
 	case TC_SETUP_QDISC_ETF:
 		return stmmac_tc_setup_etf(priv, priv, type_data);
+	case TC_SETUP_QDISC_ETS:
+		return stmmac_tc_setup_ets(priv, priv, type_data);
 	default:
 		return -EOPNOTSUPP;
 	}
