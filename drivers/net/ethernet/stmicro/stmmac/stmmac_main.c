@@ -3416,7 +3416,8 @@ static void stmmac_set_rings_length(struct stmmac_priv *priv)
 
 static u8 stmmac_get_num_tx_queues(struct stmmac_priv *priv)
 {
-	if (priv->qdisc.type == STMMAC_QDISC_ETS)
+	if (priv->qdisc.type == STMMAC_QDISC_ETS ||
+	    priv->qdisc.type == STMMAC_QDISC_MQPRIO)
 		return min(priv->qdisc.num_xmit_queues,
 			   priv->plat->tx_queues_to_use);
 
@@ -3534,17 +3535,19 @@ static void stmmac_mac_config_rx_queues_prio(struct stmmac_priv *priv)
  *  @priv: driver private structure
  *  Description: It is used for configuring the TX Queue Priority
  */
-static void stmmac_mac_config_tx_queues_prio(struct stmmac_priv *priv)
+void stmmac_mac_config_tx_queues_prio(struct stmmac_priv *priv)
 {
 	u8 tx_queues_count = priv->plat->tx_queues_to_use;
 	u8 queue;
-	u32 prio;
 
 	for (queue = 0; queue < tx_queues_count; queue++) {
-		if (!priv->plat->tx_queues_cfg[queue].use_prio)
-			continue;
+		u32 prio = 0;
 
-		prio = priv->plat->tx_queues_cfg[queue].prio;
+		if (priv->qdisc.type == STMMAC_QDISC_MQPRIO)
+			prio = priv->qdisc.prio[queue];
+		else if (priv->plat->tx_queues_cfg[queue].use_prio)
+			prio = priv->plat->tx_queues_cfg[queue].prio;
+
 		stmmac_tx_queue_prio(priv, priv->hw, prio, queue);
 	}
 }

@@ -1281,6 +1281,7 @@ static void stmmac_reset_tc_mqprio(struct net_device *ndev,
 {
 	struct stmmac_priv *priv = netdev_priv(ndev);
 
+	stmmac_mac_config_tx_queues_prio(priv);
 	if (priv->qdisc.type != STMMAC_QDISC_TAPRIO)
 		stmmac_fpe_map_preemption_class(priv, ndev, extack, 0);
 
@@ -1298,6 +1299,7 @@ static int tc_setup_dwmac510_mqprio(struct stmmac_priv *priv,
 	unsigned int ndev_num_tx_queues, num_tx_queues = 0;
 	struct netdev_tc_txq ndev_tc_to_txq[TC_MAX_QUEUE];
 	struct netdev_tc_txq tc_to_txq[TC_MAX_QUEUE] = {};
+	struct plat_stmmacenet_data *pdata = priv->plat;
 	struct netlink_ext_ack *extack = mqprio->extack;
 	struct tc_mqprio_qopt *qopt = &mqprio->qopt;
 	struct net_device *ndev = priv->dev;
@@ -1311,6 +1313,17 @@ static int tc_setup_dwmac510_mqprio(struct stmmac_priv *priv,
 	if (qopt->num_tc > ARRAY_SIZE(tc_to_txq))
 		return -EINVAL;
 
+	if (!priv->dma_cap.dcben)
+		return -EOPNOTSUPP;
+
+	/* Forcing strict priority conflicts with the CBS algorithm of AVB
+	 * queues, so reject the offload when any queue is configured as AVB.
+	 */
+	for (i = 0; i < pdata->tx_queues_to_use; i++) {
+		if (pdata->tx_queues_cfg[i].mode_to_use == MTL_QUEUE_AVB)
+			return -EOPNOTSUPP;
+	}
+
 	/* save current tc values for reset */
 	ndev_ntc = netdev_get_num_tc(ndev) ? : 1;
 	for (i = 0; i < ARRAY_SIZE(ndev->tc_to_txq); i++)
@@ -1318,6 +1331,22 @@ static int tc_setup_dwmac510_mqprio(struct stmmac_priv *priv,
 			READ_ONCE(ndev->tc_to_txq[i].combined);
 
 	for (i = 0; i < qopt->num_tc; i++) {
+		/* The offload switches the MTL scheduler to strict priority,
+		 * which only supports a 1:1 TC to TX queue mapping.
+		 */
+		if (qopt->count[i] > 1) {
+			err = -EOPNOTSUPP;
+			NL_SET_ERR_MSG_MOD(extack,
+					   "SP sched requires 1:1 TXQ map");
+			goto error_reset_tc;
+		}
+
+		if (qopt->offset[i] + qopt->count[i] > pdata->tx_queues_to_use) {
+			err = -EINVAL;
+			NL_SET_ERR_MSG_MOD(extack, "TX queue range exceeded");
+			goto error_reset_tc;
+		}
+
 		tc_to_txq[i] = (struct netdev_tc_txq) {
 			.count = qopt->count[i],
 			.offset = qopt->offset[i],
@@ -1339,7 +1368,34 @@ static int tc_setup_dwmac510_mqprio(struct stmmac_priv *priv,
 	if (err)
 		goto error_reset_num_tx_queues;
 
+	for (i = 0; i < pdata->tx_queues_to_use; i++) {
+		u32 prio = 0;
+		int j;
+
+		for (j = 0; j < qopt->num_tc; j++) {
+			int p;
+
+			if (qopt->offset[j] != i)
+				continue;
+
+			/* The PSTQX/PSTC priority map is 8 bits wide, so only
+			 * priorities 0-7 can be represented in hardware.
+			 * Priorities 8-15 are handled in software by the
+			 * kernel through the netdev prio_tc_map.
+			 */
+			for (p = 0; p < 8; p++)
+				if (qopt->prio_tc_map[p] == j)
+					prio |= BIT(p);
+			break;
+		}
+
+		priv->qdisc.prio[i] = prio;
+		stmmac_tx_queue_prio(priv, priv->hw, prio, i);
+	}
+
+	stmmac_prog_mtl_tx_algorithms(priv, priv->hw, MTL_TX_ALGORITHM_SP);
 	priv->qdisc.type = STMMAC_QDISC_MQPRIO;
+	priv->qdisc.num_xmit_queues = num_tx_queues;
 
 	return 0;
 
