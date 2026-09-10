@@ -81,6 +81,16 @@ MODULE_PARM_DESC(phyaddr, "Physical device address");
 
 #define STMMAC_TX_THRESH(x)	((x)->dma_conf.dma_tx_size / 4)
 
+/* Worst-case number of TX descriptors a single skb can consume: one for
+ * the L2/L3/L4 headers, one per fragment, one per TSO_MAX_BUFF_SIZE chunk
+ * of payload and one MSS context descriptor.  skb->len for offloaded TSO
+ * skbs is bounded by GSO_LEGACY_MAX_SIZE since the driver never raises
+ * gso_max_size.
+ */
+#define STMMAC_TX_MAX_DESC	(1 + MAX_SKB_FRAGS +			\
+				 DIV_ROUND_UP(GSO_LEGACY_MAX_SIZE,	\
+					      TSO_MAX_BUFF_SIZE) + 1)
+
 /* Limit to make sure XDP TX and slow path can coexist */
 #define STMMAC_XSK_TX_BUDGET_MAX	256
 #define STMMAC_TX_XSK_AVAIL		16
@@ -2823,8 +2833,10 @@ static int stmmac_tx_clean(struct stmmac_priv *priv, int budget, u32 queue,
 	unsigned int bytes_compl = 0, pkts_compl = 0;
 	unsigned int entry, xmits = 0, count = 0;
 	u32 tx_packets = 0, tx_errors = 0;
+	struct netdev_queue *txq;
 
-	__netif_tx_lock_bh(netdev_get_tx_queue(priv->dev, queue));
+	txq = netdev_get_tx_queue(priv->dev, queue);
+	__netif_tx_lock_bh(txq);
 
 	tx_q->xsk_frames_done = 0;
 
@@ -2942,16 +2954,15 @@ static int stmmac_tx_clean(struct stmmac_priv *priv, int budget, u32 queue,
 	}
 	tx_q->dirty_tx = entry;
 
-	netdev_tx_completed_queue(netdev_get_tx_queue(priv->dev, queue),
-				  pkts_compl, bytes_compl);
+	netdev_tx_completed_queue(txq, pkts_compl, bytes_compl);
 
-	if (unlikely(netif_tx_queue_stopped(netdev_get_tx_queue(priv->dev,
-								queue))) &&
-	    stmmac_tx_avail(priv, queue) > STMMAC_TX_THRESH(priv)) {
+	if (unlikely(netif_tx_queue_stopped(txq)) &&
+	    stmmac_tx_avail(priv, queue) >
+	    max_t(u32, STMMAC_TX_THRESH(priv), STMMAC_TX_MAX_DESC)) {
 
 		netif_dbg(priv, tx_done, priv->dev,
 			  "%s: restart transmit\n", __func__);
-		netif_tx_wake_queue(netdev_get_tx_queue(priv->dev, queue));
+		netif_tx_wake_queue(txq);
 	}
 
 	if (tx_q->xsk_pool) {
@@ -4672,7 +4683,7 @@ static netdev_tx_t stmmac_tso_xmit(struct sk_buff *skb, struct net_device *dev)
 	 */
 	tx_q->cur_tx = STMMAC_NEXT_ENTRY(tx_q->cur_tx, priv->dma_conf.dma_tx_size);
 
-	if (unlikely(stmmac_tx_avail(priv, queue) <= (MAX_SKB_FRAGS + 1))) {
+	if (unlikely(stmmac_tx_avail(priv, queue) <= STMMAC_TX_MAX_DESC)) {
 		netif_dbg(priv, hw, priv->dev, "%s: stop transmitted packets\n",
 			  __func__);
 		netif_tx_stop_queue(netdev_get_tx_queue(priv->dev, queue));
@@ -4976,7 +4987,7 @@ static netdev_tx_t stmmac_xmit(struct sk_buff *skb, struct net_device *dev)
 		print_pkt(skb->data, skb->len);
 	}
 
-	if (unlikely(stmmac_tx_avail(priv, queue) <= (MAX_SKB_FRAGS + 1))) {
+	if (unlikely(stmmac_tx_avail(priv, queue) <= STMMAC_TX_MAX_DESC)) {
 		netif_dbg(priv, hw, priv->dev, "%s: stop transmitted packets\n",
 			  __func__);
 		netif_tx_stop_queue(netdev_get_tx_queue(priv->dev, queue));
