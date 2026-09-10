@@ -4509,7 +4509,9 @@ static int stmmac_tso_get_num_desc(struct stmmac_tx_queue *tx_q,
  *   | DES3 |
  *   --------
  *
- * mss is fixed when enable tso, so w/o programming the TDES3 ctx field.
+ * A context descriptor (TDES3 ctx field) is programmed before the first data
+ * descriptor only when the MSS changes, i.e. when it differs from the cached
+ * queue MSS.
  */
 static netdev_tx_t stmmac_tso_xmit(struct sk_buff *skb, struct net_device *dev)
 {
