@@ -478,4 +478,16 @@ static inline int stmmac_selftest_get_count(struct stmmac_priv *priv)
 }
 #endif /* CONFIG_STMMAC_SELFTESTS */
 
+static inline bool stmmac_rx_8021q_offload(struct stmmac_priv *priv)
+{
+	return priv->hw->vlan && priv->hw->vlan->set_hw_vlan_mode &&
+	       priv->hw->vlan->rx_hw_vlan;
+}
+
+static inline bool stmmac_rx_8021ad_offload(struct stmmac_priv *priv)
+{
+	return stmmac_rx_8021q_offload(priv) &&
+	       priv->hw->desc->get_rx_vlan_proto;
+}
+
 #endif /* __STMMAC_H__ */

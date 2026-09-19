@@ -4879,7 +4879,9 @@ error:
 
 /**
  * stmmac_has_ip_ethertype() - Check if packet has IP ethertype
+ * @priv: driver private structure
  * @skb: socket buffer to check
+ * @xmit: transmit path
  *
  * Check if a packet has an ethertype that will trigger the IP header checks
  * and IP/TCP checksum engine of the stmmac core.
@@ -4887,16 +4889,25 @@ error:
  * Return: true if the ethertype can trigger the checksum engine, false
  * otherwise
  */
-static bool stmmac_has_ip_ethertype(struct sk_buff *skb)
+static bool stmmac_has_ip_ethertype(struct stmmac_priv *priv,
+				    struct sk_buff *skb, bool xmit)
 {
-	int depth = 0;
-	__be16 proto;
+	__be16 proto, h_proto = eth_header_parse_protocol(skb);
+	int max_l2_hlen, depth = 0;
 
-	proto = __vlan_get_protocol(skb, eth_header_parse_protocol(skb),
-				    &depth);
+	/* An S-tag still in the payload may not have been parsed by the
+	 * checksum engine; only trust it when the hardware stripped it, in
+	 * which case h_proto is no longer ETH_P_8021AD.
+	 */
+	if (h_proto == htons(ETH_P_8021AD))
+		return false;
 
-	return (depth <= ETH_HLEN) &&
-		(proto == htons(ETH_P_IP) || proto == htons(ETH_P_IPV6));
+	proto = vlan_get_protocol_offset_inline(skb, h_proto,
+						skb_mac_offset(skb), &depth);
+
+	max_l2_hlen = xmit || priv->hw->hw_vlan_en ? ETH_HLEN : VLAN_ETH_HLEN;
+	return depth <= max_l2_hlen &&
+	       (proto == htons(ETH_P_IP) || proto == htons(ETH_P_IPV6));
 }
 
 /**
@@ -5153,7 +5164,7 @@ static netdev_features_t stmmac_features_check(struct sk_buff *skb,
 	 * harmonize_features() in net/core/dev.c
 	 */
 	if (priv->plat->tx_queues_cfg[queue].coe_unsupported ||
-	    !stmmac_has_ip_ethertype(skb))
+	    !stmmac_has_ip_ethertype(priv, skb, true))
 		features &= ~(NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM);
 
 	if (skb_is_gso(skb)) {
@@ -5173,37 +5184,6 @@ static netdev_features_t stmmac_features_check(struct sk_buff *skb,
 	}
 
 	return vlan_features_check(skb, features);
-}
-
-static int stmmac_rx_vlan(struct net_device *dev, struct sk_buff *skb)
-{
-	struct vlan_ethhdr *veth;
-
-	if (!pskb_may_pull(skb, ETH_HLEN))
-		return -EINVAL;
-
-	veth = skb_vlan_eth_hdr(skb);
-	if ((veth->h_vlan_proto == htons(ETH_P_8021Q) &&
-	     dev->features & NETIF_F_HW_VLAN_CTAG_RX) ||
-	    (veth->h_vlan_proto == htons(ETH_P_8021AD) &&
-	     dev->features & NETIF_F_HW_VLAN_STAG_RX)) {
-		__be16 vlan_proto = veth->h_vlan_proto;
-		u8 meta_len = skb_metadata_len(skb);
-		u16 vlanid;
-
-		/* pop the vlan tag */
-		if (!pskb_may_pull(skb, VLAN_ETH_HLEN))
-			return -EINVAL;
-
-		veth = skb_vlan_eth_hdr(skb);
-		vlanid = ntohs(veth->h_vlan_TCI);
-		memmove(skb->data - meta_len + VLAN_HLEN,
-			skb->data - meta_len, meta_len + ETH_ALEN * 2);
-		skb_pull(skb, VLAN_HLEN);
-		__vlan_hwaccel_put_tag(skb, vlan_proto, vlanid);
-	}
-
-	return 0;
 }
 
 static bool stmmac_rx_need_ic(struct stmmac_priv *priv,
@@ -5626,15 +5606,11 @@ static void stmmac_dispatch_skb_zc(struct stmmac_priv *priv, u32 queue,
 	if (priv->hw->hw_vlan_en) {
 		/* MAC level stripping. */
 		stmmac_rx_hw_vlan(priv, priv->hw, p, skb);
-	} else if (stmmac_rx_vlan(priv->dev, skb)) {
-		dev_kfree_skb_any(skb);
-		priv->xstats.rx_dropped++;
-		return;
 	}
 
 	skb->protocol = eth_type_trans(skb, priv->dev);
 
-	if (unlikely(!coe) || !stmmac_has_ip_ethertype(skb) ||
+	if (unlikely(!coe) || !stmmac_has_ip_ethertype(priv, skb, false) ||
 	    (status & csum_none))
 		skb_checksum_none_assert(skb);
 	else
@@ -6142,15 +6118,12 @@ drain_data:
 		if (priv->hw->hw_vlan_en) {
 			/* MAC level stripping. */
 			stmmac_rx_hw_vlan(priv, priv->hw, p, skb);
-		} else if (stmmac_rx_vlan(priv->dev, skb)) {
-			dev_kfree_skb_any(skb);
-			rx_dropped++;
-			goto next;
 		}
 
 		skb->protocol = eth_type_trans(skb, priv->dev);
 
-		if (unlikely(!coe) || !stmmac_has_ip_ethertype(skb) ||
+		if (unlikely(!coe) ||
+		    !stmmac_has_ip_ethertype(priv, skb, false) ||
 		    (status & csum_none))
 			skb_checksum_none_assert(skb);
 		else
@@ -6429,7 +6402,7 @@ static netdev_features_t stmmac_fix_features(struct net_device *dev,
 	if (priv->plat->bugged_jumbo && (dev->mtu > ETH_DATA_LEN))
 		features &= ~NETIF_F_CSUM_MASK;
 
-	if (priv->plat->core_type == DWMAC_CORE_XGMAC) {
+	if (stmmac_rx_8021ad_offload(priv)) {
 		if (features & NETIF_F_HW_VLAN_CTAG_RX)
 			features |= NETIF_F_HW_VLAN_STAG_RX;
 		else
@@ -6462,7 +6435,7 @@ static int stmmac_set_features(struct net_device *netdev,
 			stmmac_enable_sph(priv, priv->ioaddr, sph_en, chan);
 	}
 
-	if (features & NETIF_F_HW_VLAN_CTAG_RX)
+	if (features & (NETIF_F_HW_VLAN_CTAG_RX | NETIF_F_HW_VLAN_STAG_RX))
 		priv->hw->hw_vlan_en = true;
 	else
 		priv->hw->hw_vlan_en = false;
@@ -8275,15 +8248,15 @@ static int __stmmac_dvr_probe(struct device *device,
 	ndev->features |= ndev->hw_features | NETIF_F_HIGHDMA;
 	ndev->watchdog_timeo = msecs_to_jiffies(watchdog);
 #ifdef STMMAC_VLAN_TAG_USED
-	/* Both mac100 and gmac support receive VLAN tag detection */
-	ndev->features |= NETIF_F_HW_VLAN_CTAG_RX;
-	if (priv->plat->core_type == DWMAC_CORE_XGMAC)
-		ndev->features |= NETIF_F_HW_VLAN_STAG_RX;
-
-	if (dwmac_is_xmac(priv->plat->core_type)) {
+	if (stmmac_rx_8021q_offload(priv)) {
+		ndev->features |= NETIF_F_HW_VLAN_CTAG_RX;
 		ndev->hw_features |= NETIF_F_HW_VLAN_CTAG_RX;
 		priv->hw->hw_vlan_en = true;
 	}
+
+	if (stmmac_rx_8021ad_offload(priv))
+		ndev->features |= NETIF_F_HW_VLAN_STAG_RX;
+
 	if (priv->dma_cap.vlhash) {
 		ndev->features |= NETIF_F_HW_VLAN_CTAG_FILTER;
 		if (priv->plat->core_type == DWMAC_CORE_XGMAC)
