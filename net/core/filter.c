@@ -4419,7 +4419,7 @@ static int bpf_xdp_frags_shrink_tail(struct xdp_buff *xdp, int offset)
 	return 0;
 }
 
-BPF_CALL_2(bpf_xdp_adjust_tail, struct xdp_buff *, xdp, int, offset)
+int __bpf_xdp_adjust_tail(struct xdp_buff *xdp, int offset)
 {
 	void *data_hard_end = xdp_data_hard_end(xdp); /* use xdp->frame_sz */
 	void *data_end = xdp->data_end + offset;
@@ -4445,6 +4445,12 @@ BPF_CALL_2(bpf_xdp_adjust_tail, struct xdp_buff *, xdp, int, offset)
 	xdp->data_end = data_end;
 
 	return 0;
+}
+EXPORT_SYMBOL_GPL(__bpf_xdp_adjust_tail);
+
+BPF_CALL_2(bpf_xdp_adjust_tail, struct xdp_buff *, xdp, int, offset)
+{
+	return __bpf_xdp_adjust_tail(xdp, offset);
 }
 
 static const struct bpf_func_proto bpf_xdp_adjust_tail_proto = {
