@@ -158,6 +158,8 @@ static void stmmac_flush_tx_descriptors(struct stmmac_priv *priv, int queue);
 static void stmmac_set_dma_operation_mode(struct stmmac_priv *priv, u32 txmode,
 					  u32 rxmode, u32 chan);
 static void stmmac_vlan_restore(struct stmmac_priv *priv);
+static void stmmac_xdp_put_buff(struct stmmac_rx_queue *rx_q,
+				struct xdp_buff *xdp, int sync_len);
 
 #ifdef CONFIG_DEBUG_FS
 static const struct net_device_ops stmmac_netdev_ops;
@@ -2173,6 +2175,12 @@ static void __free_dma_rx_desc_resources(struct stmmac_priv *priv,
 		dma_free_rx_xskbufs(priv, dma_conf, queue);
 	else
 		dma_free_rx_skbufs(priv, dma_conf, queue);
+
+	if (rx_q->state.frames && !rx_q->xsk_pool) {
+		stmmac_xdp_put_buff(rx_q, &rx_q->state.xdp, -1);
+		rx_q->state_saved = false;
+		rx_q->state.frames = 0;
+	}
 
 	rx_q->buf_alloc_num = 0;
 	rx_q->xsk_pool = NULL;
@@ -8377,6 +8385,11 @@ static void stmmac_reset_rx_queue(struct stmmac_priv *priv, u32 queue)
 
 	rx_q->cur_rx = 0;
 	rx_q->dirty_rx = 0;
+	if (rx_q->state.frames && !rx_q->xsk_pool) {
+		stmmac_xdp_put_buff(rx_q, &rx_q->state.xdp, -1);
+		rx_q->state_saved = false;
+		rx_q->state.frames = 0;
+	}
 }
 
 static void stmmac_reset_tx_queue(struct stmmac_priv *priv, u32 queue)
