@@ -5840,8 +5840,7 @@ read_again:
 			xdp_prepare_buff(&ctx.xdp, page_address(buf->page),
 					 buf->page_offset, buf1_len, true);
 
-			pre_len = ctx.xdp.data_end - ctx.xdp.data_hard_start -
-				  buf->page_offset;
+			pre_len = ctx.xdp.data_end - ctx.xdp.data_hard_start;
 
 			ctx.priv = priv;
 			ctx.desc = p;
@@ -5851,8 +5850,7 @@ read_again:
 			/* Due xdp_adjust_tail: DMA sync for_device
 			 * cover max len CPU touch
 			 */
-			sync_len = ctx.xdp.data_end - ctx.xdp.data_hard_start -
-				   buf->page_offset;
+			sync_len = ctx.xdp.data_end - ctx.xdp.data_hard_start;
 			sync_len = max(sync_len, pre_len);
 
 			/* For Not XDP_PASS verdict */
