@@ -674,6 +674,8 @@ static int stmmac_hwtstamp_set(struct net_device *dev,
 	    config->tx_type != HWTSTAMP_TX_ON)
 		return -ERANGE;
 
+	mutex_lock(&priv->lock);
+
 	if (priv->adv_ts) {
 		switch (config->rx_filter) {
 		case HWTSTAMP_FILTER_NONE:
@@ -796,6 +798,7 @@ static int stmmac_hwtstamp_set(struct net_device *dev,
 			break;
 
 		default:
+			mutex_unlock(&priv->lock);
 			return -ERANGE;
 		}
 	} else {
@@ -826,6 +829,8 @@ static int stmmac_hwtstamp_set(struct net_device *dev,
 	stmmac_config_hw_tstamping(priv, priv->ptpaddr, priv->systime_flags);
 
 	priv->tstamp_config = *config;
+
+	mutex_unlock(&priv->lock);
 
 	return 0;
 }
@@ -7708,8 +7713,9 @@ static int stmmac_dl_ts_coarse_set(struct devlink *dl, u32 id,
 	struct stmmac_devlink_priv *dl_priv = devlink_priv(dl);
 	struct stmmac_priv *priv = dl_priv->stmmac_priv;
 
-	priv->tsfupdt_coarse = ctx->val.vbool;
+	mutex_lock(&priv->lock);
 
+	priv->tsfupdt_coarse = ctx->val.vbool;
 	if (priv->tsfupdt_coarse)
 		priv->systime_flags &= ~PTP_TCR_TSCFUPDT;
 	else
@@ -7719,6 +7725,8 @@ static int stmmac_dl_ts_coarse_set(struct devlink *dl, u32 id,
 	 * reconfigure the systime, subsecond increment and addend.
 	 */
 	stmmac_update_subsecond_increment(priv);
+
+	mutex_unlock(&priv->lock);
 
 	return 0;
 }
