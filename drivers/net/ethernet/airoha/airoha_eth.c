@@ -140,7 +140,7 @@ static int airoha_set_macaddr(struct airoha_gdm_dev *dev, const u8 *addr)
 	airoha_fe_wr(eth, REG_FE_MAC_LMIN(reg), lmin);
 	airoha_fe_wr(eth, REG_FE_MAC_LMAX(reg), lmax);
 
-	airoha_ppe_init_upd_mem(dev, addr);
+	airoha_ppe_init_upd_mem(dev, dev->port->id, addr);
 
 	return 0;
 }
@@ -3927,6 +3927,35 @@ static int airoha_register_gdm_devices(struct airoha_eth *eth)
 	return 0;
 }
 
+static int airoha_dev_event(struct notifier_block *nb, unsigned long event,
+			    void *ptr)
+{
+	struct airoha_eth *eth = container_of(nb, struct airoha_eth, nb);
+	struct net_device *netdev = netdev_notifier_info_to_dev(ptr);
+	const u8 *addr = netdev->dev_addr;
+	struct airoha_gdm_dev *dev;
+	int dsa_port, smac_id;
+
+	if (event != NETDEV_UP && event != NETDEV_CHANGEADDR)
+		return NOTIFY_DONE;
+
+	dsa_port = airoha_get_dsa_port(&netdev);
+	if (dsa_port < 0)
+		return NOTIFY_DONE;
+
+	dev = netdev_priv(netdev);
+	if (!airoha_is_valid_gdm_dev(eth, dev))
+		return NOTIFY_DONE;
+
+	smac_id = airoha_ppe_get_dsa_smac_id(eth, dsa_port);
+	if (smac_id < 0)
+		return NOTIFY_DONE;
+
+	airoha_ppe_init_upd_mem(dev, smac_id, addr);
+
+	return NOTIFY_DONE;
+}
+
 static int airoha_probe(struct platform_device *pdev)
 {
 	struct reset_control_bulk_data *xsi_rsts;
@@ -4018,12 +4047,19 @@ static int airoha_probe(struct platform_device *pdev)
 		}
 	}
 
-	err = airoha_register_gdm_devices(eth);
+	eth->nb.notifier_call = airoha_dev_event;
+	err = register_netdevice_notifier(&eth->nb);
 	if (err)
 		goto error_napi_stop;
 
+	err = airoha_register_gdm_devices(eth);
+	if (err)
+		goto error_unreg_notifier;
+
 	return 0;
 
+error_unreg_notifier:
+	unregister_netdevice_notifier(&eth->nb);
 error_napi_stop:
 	for (i = 0; i < ARRAY_SIZE(eth->qdma); i++) {
 		airoha_qdma_stop_napi(&eth->qdma[i]);
@@ -4064,6 +4100,7 @@ static void airoha_remove(struct platform_device *pdev)
 	struct airoha_eth *eth = platform_get_drvdata(pdev);
 	int i;
 
+	unregister_netdevice_notifier(&eth->nb);
 	for (i = 0; i < ARRAY_SIZE(eth->qdma); i++) {
 		airoha_qdma_stop_napi(&eth->qdma[i]);
 		airoha_qdma_tx_cleanup(&eth->qdma[i]);

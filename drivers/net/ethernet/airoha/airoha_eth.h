@@ -677,6 +677,8 @@ struct airoha_eth {
 
 	struct net_device *napi_dev;
 
+	struct notifier_block nb;
+
 	struct airoha_qdma qdma[AIROHA_MAX_NUM_QDMA];
 	struct airoha_gdm_port *ports[AIROHA_MAX_NUM_GDM_PORTS];
 };
@@ -757,6 +759,8 @@ airoha_qdma_deref(struct airoha_gdm_dev *dev)
 					 lockdep_is_held(&flow_offload_mutex));
 }
 
+int airoha_get_dsa_port(struct net_device **dev);
+int airoha_ppe_get_dsa_smac_id(struct airoha_eth *eth, u16 dsa_id);
 void airoha_ppe_set_xmit_frame_size(struct airoha_gdm_dev *dev);
 void airoha_ppe_set_cpu_port(struct airoha_gdm_dev *dev, u8 ppe_id, u8 fport);
 bool airoha_ppe_is_enabled(struct airoha_eth *eth, int index);
@@ -765,7 +769,8 @@ void airoha_ppe_check_skb(struct airoha_ppe_dev *dev, struct sk_buff *skb,
 int airoha_ppe_setup_tc_block_cb(struct airoha_ppe_dev *dev, void *type_data);
 int airoha_ppe_init(struct airoha_eth *eth);
 void airoha_ppe_deinit(struct airoha_eth *eth);
-void airoha_ppe_init_upd_mem(struct airoha_gdm_dev *dev, const u8 *addr);
+void airoha_ppe_init_upd_mem(struct airoha_gdm_dev *dev, int id,
+			     const u8 *addr);
 u32 airoha_ppe_get_total_num_entries(struct airoha_ppe *ppe);
 struct airoha_foe_entry *airoha_ppe_foe_get_entry(struct airoha_ppe *ppe,
 						  u32 hash);

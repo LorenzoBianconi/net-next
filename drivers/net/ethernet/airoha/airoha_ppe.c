@@ -315,7 +315,7 @@ err_out:
 	return err;
 }
 
-static int airoha_get_dsa_port(struct net_device **dev)
+int airoha_get_dsa_port(struct net_device **dev)
 {
 #if IS_ENABLED(CONFIG_NET_DSA)
 	struct dsa_port *dp = dsa_port_from_netdev(*dev);
@@ -328,6 +328,29 @@ static int airoha_get_dsa_port(struct net_device **dev)
 #else
 	return -ENODEV;
 #endif
+}
+
+int airoha_ppe_get_dsa_smac_id(struct airoha_eth *eth, u16 dsa_id)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(eth->ports); i++) {
+		struct airoha_gdm_port *port = eth->ports[i];
+		int j;
+
+		if (!port)
+			continue;
+
+		for (j = 0; j < ARRAY_SIZE(port->devs); j++) {
+			if (port->devs[j])
+				dsa_id++;
+		}
+
+		if (dsa_id > FIELD_MAX(PPE_UPDMEM_ADDR_MASK))
+			return -EINVAL;
+	}
+
+	return dsa_id;
 }
 
 static void airoha_ppe_foe_set_bridge_addrs(struct airoha_foe_bridge *br,
@@ -348,7 +371,7 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
 	u32 qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f), ports_pad, val;
 	int wlan_etype = -EINVAL, dsa_port = airoha_get_dsa_port(&netdev);
 	struct airoha_foe_mac_info_common *l2;
-	u8 smac_id = 0xf;
+	int smac_id = 0xf;
 
 	memset(hwe, 0, sizeof(*hwe));
 
@@ -409,11 +432,16 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
 			 */
 			if (airoha_is_lan_gdm_dev(dev))
 				val |= AIROHA_FOE_IB2_FAST_PATH;
-			if (dsa_port >= 0)
+			if (dsa_port >= 0) {
 				val |= FIELD_PREP(AIROHA_FOE_IB2_NBQ,
 						  dsa_port);
-
-			smac_id = port->id;
+				smac_id = airoha_ppe_get_dsa_smac_id(eth,
+								     dsa_port);
+				if (smac_id < 0)
+					smac_id = 0xf;
+			} else {
+				smac_id = port->id;
+			}
 		}
 	}
 
@@ -1518,22 +1546,22 @@ void airoha_ppe_check_skb(struct airoha_ppe_dev *dev, struct sk_buff *skb,
 	airoha_ppe_foe_insert_entry(ppe, skb, hash, rx_wlan);
 }
 
-void airoha_ppe_init_upd_mem(struct airoha_gdm_dev *dev, const u8 *addr)
+void airoha_ppe_init_upd_mem(struct airoha_gdm_dev *dev, int id,
+			     const u8 *addr)
 {
-	struct airoha_gdm_port *port = dev->port;
 	struct airoha_eth *eth = dev->eth;
 	u32 val;
 
 	val = (addr[2] << 24) | (addr[3] << 16) | (addr[4] << 8) | addr[5];
 	airoha_fe_wr(eth, REG_UPDMEM_DATA(0), val);
 	airoha_fe_wr(eth, REG_UPDMEM_CTRL(0),
-		     FIELD_PREP(PPE_UPDMEM_ADDR_MASK, port->id) |
+		     FIELD_PREP(PPE_UPDMEM_ADDR_MASK, id) |
 		     PPE_UPDMEM_WR_MASK | PPE_UPDMEM_REQ_MASK);
 
 	val = (addr[0] << 8) | addr[1];
 	airoha_fe_wr(eth, REG_UPDMEM_DATA(0), val);
 	airoha_fe_wr(eth, REG_UPDMEM_CTRL(0),
-		     FIELD_PREP(PPE_UPDMEM_ADDR_MASK, port->id) |
+		     FIELD_PREP(PPE_UPDMEM_ADDR_MASK, id) |
 		     FIELD_PREP(PPE_UPDMEM_OFFSET_MASK, 1) |
 		     PPE_UPDMEM_WR_MASK | PPE_UPDMEM_REQ_MASK);
 }
