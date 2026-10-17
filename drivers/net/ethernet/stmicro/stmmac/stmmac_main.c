@@ -5251,23 +5251,54 @@ static unsigned int stmmac_rx_buf2_len(struct stmmac_priv *priv,
 	return plen > len ? plen - len : 0;
 }
 
+static unsigned int stmmac_xdp_get_num_frames(struct stmmac_priv *priv,
+					      struct xdp_frame *xdpf)
+{
+	bool is_jumbo_xdf = false;
+	unsigned int num_frames;
+
+	if (priv->plat->enh_desc)
+		is_jumbo_xdf = stmmac_is_jumbo_frm(priv,
+						   xdp_get_frame_len(xdpf),
+						   priv->plat->enh_desc);
+
+	num_frames = is_jumbo_xdf ? DIV_ROUND_UP(xdpf->len, BUF_SIZE_8KiB) : 1;
+	if (unlikely(xdp_frame_has_frags(xdpf))) {
+		struct skb_shared_info *sinfo;
+
+		sinfo = xdp_get_shared_info_from_frame(xdpf);
+		if (is_jumbo_xdf) {
+			int i;
+
+			for (i = 0; i < sinfo->nr_frags; i++) {
+				skb_frag_t *frag = &sinfo->frags[i];
+
+				num_frames += DIV_ROUND_UP(skb_frag_size(frag),
+							   BUF_SIZE_8KiB);
+			}
+		} else {
+			num_frames += sinfo->nr_frags;
+		}
+	}
+
+	return num_frames;
+}
+
 static int stmmac_xdp_xmit_xdpf(struct stmmac_priv *priv, int queue,
 				struct xdp_frame *xdpf, bool dma_map)
 {
 	struct skb_shared_info *sinfo = xdp_get_shared_info_from_frame(xdpf);
 	struct stmmac_tx_queue *tx_q = &priv->dma_conf.tx_queue[queue];
 	bool csum = !priv->plat->tx_queues_cfg[queue].coe_unsupported;
-	unsigned int txq_thr = STMMAC_TX_THRESH(priv);
+	unsigned int num_frames, txq_thr = STMMAC_TX_THRESH(priv);
 	unsigned int first_entry = tx_q->cur_tx;
 	unsigned int entry = tx_q->cur_tx;
-	unsigned int num_frames = 1;
+	bool is_jumbo_xdf = false;
 	struct dma_desc *desc;
+	int n = 0, i = 0;
 	u32 tx_coal;
-	int i = 0;
 
-	if (unlikely(xdp_frame_has_frags(xdpf)))
-		num_frames += sinfo->nr_frags;
-
+	num_frames = stmmac_xdp_get_num_frames(priv, xdpf);
 	if (stmmac_tx_avail(priv, queue) < max(num_frames, txq_thr))
 		return STMMAC_XDP_CONSUMED;
 
@@ -5278,14 +5309,18 @@ static int stmmac_xdp_xmit_xdpf(struct stmmac_priv *priv, int queue,
 		return STMMAC_XDP_CONSUMED;
 	}
 
-	while (true) {
+	if (priv->plat->enh_desc)
+		is_jumbo_xdf = stmmac_is_jumbo_frm(priv,
+						   xdp_get_frame_len(xdpf),
+						   priv->plat->enh_desc);
+
+	while (n < num_frames) {
 		skb_frag_t *frag = i ? &sinfo->frags[i - 1] : NULL;
 		int len = frag ? skb_frag_size(frag) : xdpf->len;
-		bool last_frame = i == num_frames - 1;
 		enum stmmac_txbuf_type buf_type;
 		dma_addr_t dma_addr;
+		int j = 0;
 
-		desc = stmmac_get_tx_desc(priv, tx_q, entry);
 		if (dma_map) {
 			if (frag)
 				dma_addr = skb_frag_dma_map(priv->device,
@@ -5314,19 +5349,44 @@ static int stmmac_xdp_xmit_xdpf(struct stmmac_priv *priv, int queue,
 			buf_type = STMMAC_TXBUF_T_XDP_TX;
 		}
 
-		stmmac_set_tx_dma_entry(tx_q, entry, buf_type, dma_addr, len,
-					dma_map && frag);
-		stmmac_set_desc_addr(priv, desc, dma_addr);
-		stmmac_prepare_tx_desc(priv, desc, !i, len, csum,
-				       priv->descriptor_mode, !!i, last_frame,
-				       xdp_get_frame_len(xdpf));
-		tx_q->xdpf[entry] = last_frame ? xdpf : NULL;
-		if (last_frame) {
-			stmmac_set_tx_dma_last_segment(tx_q, entry);
-			break;
-		}
+		while (len > 0) {
+			dma_addr_t addr = dma_addr + j * BUF_SIZE_8KiB;
+			bool last_frame = n == num_frames - 1;
+			int size;
 
-		entry = STMMAC_NEXT_ENTRY(entry, priv->dma_conf.dma_tx_size);
+			desc = stmmac_get_tx_desc(priv, tx_q, entry);
+			size = is_jumbo_xdf ? min(len, BUF_SIZE_8KiB) : len;
+
+			if (!j)
+				stmmac_set_tx_dma_entry(tx_q, entry, buf_type,
+							dma_addr, len,
+							dma_map && frag);
+			else
+				stmmac_set_tx_dma_entry(tx_q, entry, buf_type,
+							0, size, false);
+
+			stmmac_set_desc_addr(priv, desc, addr);
+			if (priv->descriptor_mode == STMMAC_RING_MODE &&
+			    is_jumbo_xdf) {
+				desc->des3 = cpu_to_le32(lower_32_bits(addr) +
+							 BUF_SIZE_4KiB);
+				tx_q->tx_skbuff_dma[entry].is_jumbo = true;
+			}
+			stmmac_prepare_tx_desc(priv, desc, !n, size, csum,
+					       priv->descriptor_mode, !!n, last_frame,
+					       xdp_get_frame_len(xdpf));
+			tx_q->xdpf[entry] = last_frame ? xdpf : NULL;
+			len -= size;
+			j++;
+			n++;
+
+			if (last_frame) {
+				stmmac_set_tx_dma_last_segment(tx_q, entry);
+				break;
+			}
+
+			entry = STMMAC_NEXT_ENTRY(entry, priv->dma_conf.dma_tx_size);
+		}
 		i++;
 	}
 	tx_q->tx_count_frames += num_frames;
